@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Node
+server/node_modules/
+server/package-lock.json
+
+# Env / secrets
+.env
+.env.*
+
+# Claude Code local settings
+.claude/settings.local.json
