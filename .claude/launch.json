@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "flash-server",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["/Users/eliejesuran/Documents/CODE/flash/server/server.js"],
+      "port": 3001
+    },
+    {
+      "name": "flash-front",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "5500", "--directory", "/Users/eliejesuran/Documents/CODE/flash"],
+      "port": 5500
+    }
+  ]
+}

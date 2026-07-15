@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0a0a0f">
+<title>Flash</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overscroll-behavior: none; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #0a0a0f; color: #eee;
+    display: flex; flex-direction: column;
+  }
+  [hidden] { display: none !important; }
+
+  .screen {
+    flex: 1; min-height: 100dvh;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 24px; gap: 18px; text-align: center;
+  }
+  h1 { font-size: 2.4rem; letter-spacing: .02em; }
+  .sub { opacity: .6; font-size: .95rem; max-width: 320px; }
+
+  button {
+    font: inherit; padding: 14px 28px; border-radius: 12px; border: none;
+    background: #6c5ce7; color: #fff; font-weight: 600; cursor: pointer; min-width: 220px;
+  }
+  button:active { transform: scale(.97); }
+  button:disabled { opacity: .35; cursor: not-allowed; }
+  button.secondary { background: #23232f; }
+  button.danger { background: #3a1f1f; color: #ff8a8a; }
+
+  input[type=text] {
+    font: inherit; padding: 14px; border-radius: 12px; border: 2px solid #2c2c38;
+    background: #161620; color: #fff; text-align: center;
+    text-transform: uppercase; letter-spacing: .2em; width: 220px;
+  }
+  input[type=text]:focus { outline: none; border-color: #6c5ce7; }
+
+  .divider { opacity: .35; font-size: .8rem; }
+
+  #code-display { font-size: 2.6rem; font-weight: 700; letter-spacing: .12em; }
+  #qr-canvas { border-radius: 12px; background: #fff; padding: 8px; line-height: 0; }
+
+  .badge { padding: 6px 14px; border-radius: 999px; background: #1a1a24; font-size: .85rem; }
+  .badge.on { background: #1f4d2f; color: #6fe08c; }
+
+  .row { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+
+  #meter { width: 240px; height: 10px; background: #1a1a24; border-radius: 6px; overflow: hidden; }
+  #meter-fill { height: 100%; width: 0%; background: #6c5ce7; }
+
+  #track-name { font-size: .85rem; opacity: .7; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ── Écran client : zone plein écran réactive au flash ── */
+  #screen-client { position: relative; padding: 0; overflow: hidden; }
+  #flash-zone {
+    position: absolute; inset: 0; background-color: #000;
+    transition: background-color 60ms linear;
+  }
+  .client-ui {
+    position: relative; z-index: 1;
+    display: flex; flex-direction: column; align-items: center; justify-content: space-between;
+    height: 100%; width: 100%; padding: 24px; gap: 16px;
+  }
+  .client-ui .row { padding-top: 8px; }
+</style>
+</head>
+<body>
+
+  <!-- ─── Accueil ─── -->
+  <div class="screen" id="screen-home">
+    <h1>⚡ Flash</h1>
+    <p class="sub">Light show synchronisé — un maître joue la musique, les téléphones autour flashent en rythme.</p>
+
+    <button id="btn-create">🎵 Créer une session</button>
+
+    <span class="divider">— ou —</span>
+
+    <input type="text" id="input-code" placeholder="CODE" maxlength="6" autocomplete="off" autocapitalize="characters">
+    <button id="btn-join" class="secondary">Rejoindre</button>
+  </div>
+
+  <!-- ─── Maître ─── -->
+  <div class="screen" id="screen-master" hidden>
+    <div id="code-display">----</div>
+    <canvas id="qr-canvas"></canvas>
+    <span class="badge"><span id="master-peers">0</span> connecté(s)</span>
+
+    <input type="file" id="audio-file" accept="audio/*">
+    <div id="track-name"></div>
+
+    <button id="btn-play" disabled>▶ Lecture</button>
+    <div id="meter"><div id="meter-fill"></div></div>
+
+    <button id="btn-leave-master" class="danger">Quitter la session</button>
+  </div>
+
+  <!-- ─── Client ─── -->
+  <div class="screen" id="screen-client" hidden>
+    <div id="flash-zone"></div>
+    <div class="client-ui">
+      <span id="client-status" class="badge">Connexion...</span>
+      <div class="row">
+        <span class="badge"><span id="client-peers">0</span> connecté(s)</span>
+        <span id="torch-badge" class="badge">…</span>
+      </div>
+      <button id="btn-leave-client" class="danger">Quitter</button>
+    </div>
+  </div>
+
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+<script>
+(() => {
+  'use strict';
+
+  // Dev local → serveur local. Sinon → serveur Render.
+  // TODO: remplacer par l'URL réelle une fois le service Render créé (voir claude.md § Hébergement).
+  const WS_SERVER = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
+    ? 'ws://localhost:3001'
+    : 'wss://REMPLACER-PAR-URL-RENDER.onrender.com';
+
+  const $ = (sel) => document.querySelector(sel);
+
+  const screens = {
+    home: $('#screen-home'),
+    master: $('#screen-master'),
+    client: $('#screen-client'),
+  };
+
+  function showScreen(name) {
+    for (const [key, el] of Object.entries(screens)) el.hidden = key !== name;
+  }
+
+  function randomCode(len = 5) {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sans I/O/0/1 ambigus
+    let out = '';
+    for (let i = 0; i < len; i++) out += chars[Math.floor(Math.random() * chars.length)];
+    return out;
+  }
+
+  // ─── WebSocket ──────────────────────────────────────────────────────────
+
+  let ws = null;
+  let wsRole = null;
+  let pingInterval = null;
+
+  function wsConnect(sessionId, role) {
+    wsRole = role;
+    ws = new WebSocket(`${WS_SERVER}/session/${sessionId}`);
+
+    ws.addEventListener('open', () => {
+      wsSend({ type: 'identify', role });
+      pingInterval = setInterval(() => wsSend({ type: 'ping' }), 20000);
+    });
+
+    ws.addEventListener('message', (ev) => {
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch { return; }
+      handleWsMessage(msg);
+    });
+
+    ws.addEventListener('close', () => {
+      clearInterval(pingInterval);
+      if (wsRole === 'client') clientSetStatus('Connexion perdue');
+    });
+  }
+
+  function wsSend(obj) {
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+  }
+
+  function wsDisconnect() {
+    if (ws) { ws.close(); ws = null; }
+    clearInterval(pingInterval);
+  }
+
+  function handleWsMessage(msg) {
+    switch (msg.type) {
+      case 'joined':
+        setPeerCount(msg.peers);
+        if (wsRole === 'client') clientSetMasterStatus(msg.hasMaster);
+        break;
+      case 'master_status':
+        if (wsRole === 'client') clientSetMasterStatus(msg.hasMaster);
+        break;
+      case 'peers_update':
+        setPeerCount(msg.peers);
+        break;
+      case 'cue':
+        if (wsRole === 'client') clientApplyCue(msg.intensity);
+        break;
+      case 'track_control':
+        if (wsRole === 'client' && msg.action === 'pause') clientApplyCue(0);
+        break;
+      case 'error':
+        onWsError(msg);
+        break;
+    }
+  }
+
+  function onWsError(msg) {
+    if (msg.code === 'MASTER_TAKEN') alert('Session déjà pilotée par un autre maître.');
+    else if (msg.code === 'SESSION_FULL') alert('Session pleine.');
+    else return;
+    wsDisconnect();
+    showScreen('home');
+  }
+
+  function setPeerCount(n) {
+    $('#master-peers').textContent = n;
+    $('#client-peers').textContent = n;
+  }
+
+  // ─── Accueil ────────────────────────────────────────────────────────────
+
+  $('#btn-create').addEventListener('click', () => startMaster(randomCode()));
+
+  $('#btn-join').addEventListener('click', () => {
+    const code = $('#input-code').value.trim().toUpperCase();
+    if (code.length < 4) { $('#input-code').focus(); return; }
+    startClient(code);
+  });
+
+  const joinParam = new URLSearchParams(location.search).get('join');
+  if (joinParam) $('#input-code').value = joinParam.toUpperCase();
+
+  // ─── Maître ─────────────────────────────────────────────────────────────
+
+  let audioCtx = null, analyser = null, audioEl = null, rafId = null;
+  let playing = false, lastCueSentAt = 0, smoothedIntensity = 0;
+
+  function startMaster(code) {
+    showScreen('master');
+    $('#code-display').textContent = code;
+    renderQr(code);
+    wsConnect(code, 'master');
+  }
+
+  function renderQr(code) {
+    // La lib QR vient d'un CDN — un blocage (ad-blocker, offline, wifi de salle)
+    // ne doit jamais empêcher la connexion WS qui suit. Fallback : code texte seul.
+    if (typeof QRCode === 'undefined') {
+      console.warn('[qr] bibliothèque indisponible — code texte uniquement');
+      $('#qr-canvas').hidden = true;
+      return;
+    }
+    const url = `${location.origin}${location.pathname}?join=${code}`;
+    QRCode.toCanvas($('#qr-canvas'), url, { width: 220, margin: 1 }, (err) => {
+      if (err) { console.error('[qr]', err); $('#qr-canvas').hidden = true; }
+    });
+  }
+
+  $('#audio-file').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (file) setupAudio(file);
+  });
+
+  function setupAudio(file) {
+    if (!audioEl) {
+      audioEl = new Audio();
+      audioEl.addEventListener('ended', () => { playing = false; updatePlayButton(); cancelAnimationFrame(rafId); });
+    }
+    audioEl.src = URL.createObjectURL(file);
+
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const source = audioCtx.createMediaElementSource(audioEl);
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.6;
+      source.connect(analyser);
+      analyser.connect(audioCtx.destination);
+    }
+
+    $('#btn-play').disabled = false;
+    $('#track-name').textContent = file.name;
+  }
+
+  $('#btn-play').addEventListener('click', async () => {
+    if (!audioEl) return;
+    if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+    if (playing) {
+      audioEl.pause();
+      playing = false;
+      wsSend({ type: 'track_control', action: 'pause' });
+      cancelAnimationFrame(rafId);
+    } else {
+      await audioEl.play();
+      playing = true;
+      wsSend({ type: 'track_control', action: 'play' });
+      analysisLoop();
+    }
+    updatePlayButton();
+  });
+
+  function updatePlayButton() {
+    $('#btn-play').textContent = playing ? '⏸ Pause' : '▶ Lecture';
+  }
+
+  function analysisLoop() {
+    if (!playing) return;
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    analyser.getByteFrequencyData(data);
+
+    // Bandes basses = premiers ~12% des bins (espacement linéaire de l'AnalyserNode)
+    const bassCount = Math.max(1, Math.floor(data.length * 0.12));
+    let sum = 0;
+    for (let i = 0; i < bassCount; i++) sum += data[i];
+    const raw = (sum / bassCount) / 255;
+
+    smoothedIntensity += (raw - smoothedIntensity) * 0.35;
+    $('#meter-fill').style.width = `${Math.round(smoothedIntensity * 100)}%`;
+
+    const now = performance.now();
+    if (now - lastCueSentAt >= 33) { // ~30Hz max
+      lastCueSentAt = now;
+      wsSend({ type: 'cue', intensity: Math.round(smoothedIntensity * 1000) / 1000 });
+    }
+
+    rafId = requestAnimationFrame(analysisLoop);
+  }
+
+  $('#btn-leave-master').addEventListener('click', () => {
+    if (playing) { audioEl.pause(); playing = false; }
+    cancelAnimationFrame(rafId);
+    wsDisconnect();
+    showScreen('home');
+  });
+
+  // ─── Client ─────────────────────────────────────────────────────────────
+
+  let torchTrack = null, torchSupported = false, torchTimer = null, torchLoopActive = false;
+  let latestIntensity = 0;
+
+  function startClient(code) {
+    showScreen('client');
+    clientSetStatus('Connexion...');
+    wsConnect(code, 'client');
+    setupTorch();
+  }
+
+  function clientSetMasterStatus(hasMaster) {
+    clientSetStatus(hasMaster ? 'Synchronisé' : 'En attente du maître...');
+  }
+
+  function clientSetStatus(text) {
+    $('#client-status').textContent = text;
+  }
+
+  function clientApplyCue(intensity) {
+    const v = Math.max(0, Math.min(1, intensity));
+    latestIntensity = v;
+    const c = v * 255 | 0;
+    $('#flash-zone').style.backgroundColor = `rgb(${c},${c},${c})`;
+    if (torchSupported && !torchLoopActive) torchLoop();
+  }
+
+  async function setupTorch() {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      $('#torch-badge').textContent = '📱 Mode écran';
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment', width: { ideal: 64 }, height: { ideal: 64 } },
+      });
+      const track = stream.getVideoTracks()[0];
+      const caps = track.getCapabilities?.() || {};
+      if (caps.torch) {
+        torchTrack = track;
+        torchSupported = true;
+        $('#torch-badge').textContent = '🔦 Torche active';
+        $('#torch-badge').classList.add('on');
+      } else {
+        track.stop();
+        $('#torch-badge').textContent = '📱 Mode écran';
+      }
+    } catch {
+      $('#torch-badge').textContent = '📱 Mode écran';
+    }
+  }
+
+  // Boucle auto-entretenue, découplée du débit réseau des cues :
+  // lit latestIntensity à chaque tick de fenêtre plutôt que d'être relancée à chaque message.
+  function torchLoop() {
+    torchLoopActive = true;
+    const WINDOW_MS = 200;
+    const v = latestIntensity;
+    const onMs = Math.round(v * WINDOW_MS);
+
+    if (onMs <= 5) {
+      setTorch(false);
+      torchTimer = setTimeout(torchLoop, WINDOW_MS);
+    } else if (onMs >= WINDOW_MS - 5) {
+      setTorch(true);
+      torchTimer = setTimeout(torchLoop, WINDOW_MS);
+    } else {
+      setTorch(true);
+      torchTimer = setTimeout(() => {
+        setTorch(false);
+        torchTimer = setTimeout(torchLoop, WINDOW_MS - onMs);
+      }, onMs);
+    }
+  }
+
+  function setTorch(on) {
+    if (torchTrack) torchTrack.applyConstraints({ advanced: [{ torch: on }] }).catch(() => {});
+  }
+
+  function stopTorch() {
+    clearTimeout(torchTimer);
+    torchLoopActive = false;
+    if (torchTrack) {
+      setTorch(false);
+      torchTrack.stop();
+      torchTrack = null;
+    }
+    torchSupported = false;
+  }
+
+  $('#btn-leave-client').addEventListener('click', () => {
+    stopTorch();
+    wsDisconnect();
+    showScreen('home');
+  });
+
+  showScreen('home');
+})();
+</script>
+</body>
+</html>
