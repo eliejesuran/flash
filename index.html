@@ -100,7 +100,7 @@
     <input type="text" id="input-code" placeholder="CODE" maxlength="6" autocomplete="off" autocapitalize="characters">
     <div class="row">
       <button id="btn-join" class="secondary">Rejoindre</button>
-      <button id="btn-scan" class="secondary" hidden>📷 Scanner</button>
+      <button id="btn-scan" class="secondary">📷 Scanner</button>
     </div>
   </div>
 
@@ -757,17 +757,25 @@
   $('#btn-share-close').addEventListener('click', () => { $('#share-overlay').hidden = true; });
 
   // ─── Scanner QR in-app ──────────────────────────────────────────────────
-  // BarcodeDetector uniquement (Chrome/Edge/Android + Safari 17+) : pas de
-  // lib CDN pour ça, on a déjà eu un bug à cause d'un CDN bloqué pour le QR
-  // encoder (voir renderQr) — inutile de dupliquer ce risque. Sans support,
-  // le bouton reste caché ; code manuel ou scan via l'appareil photo natif.
+  // BarcodeDetector uniquement (Chrome/Edge/Android) : pas de lib CDN pour
+  // ça, on a déjà eu deux bugs CDN sur l'encodeur QR (voir renderQrInto) —
+  // inutile de dupliquer ce risque. AUCUNE version de Safari/iOS ne
+  // l'implémente (vérifié caniuse — "disabled by default" partout sur iOS,
+  // même chose sous WebKit). Bouton toujours visible (pas caché en silence,
+  // ça prête à confusion) : message clair au clic si indisponible plutôt
+  // que le bouton qui disparaît sans explication.
 
   const scanSupported = 'BarcodeDetector' in window;
-  if (scanSupported) $('#btn-scan').hidden = false;
 
   let scanStream = null, scanTimer = null;
 
-  $('#btn-scan').addEventListener('click', startScan);
+  $('#btn-scan').addEventListener('click', () => {
+    if (!scanSupported) {
+      alert('Scanner indisponible sur ce navigateur (iOS/Safari ne le supporte pas). Utilise le code, ou scanne le QR avec l\'appareil photo natif.');
+      return;
+    }
+    startScan();
+  });
   $('#btn-scan-cancel').addEventListener('click', stopScan);
 
   async function startScan() {
