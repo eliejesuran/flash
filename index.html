@@ -107,6 +107,7 @@
   <div class="screen" id="screen-master" hidden>
     <div id="code-display">----</div>
     <canvas id="qr-canvas"></canvas>
+    <p id="qr-hint" class="sub" hidden>QR indisponible (réseau/CDN) — utilise le code</p>
     <div class="row">
       <span class="badge"><span id="master-peers">0</span> connecté(s)</span>
       <span id="master-status" class="badge">Connexion...</span>
@@ -151,11 +152,26 @@
 (() => {
   'use strict';
 
-  // Dev local → serveur local. Sinon → serveur Render.
+  // Dev local (localhost, 127.0.0.1, ou une IP du réseau local pour tester
+  // depuis un vrai téléphone sur le même wifi) → serveur local au même hôte.
+  // Sinon → serveur Render.
   // TODO: remplacer par l'URL réelle une fois le service Render créé (voir claude.md § Hébergement).
-  const WS_SERVER = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
-    ? 'ws://localhost:3001'
+  function isLocalDevHost(hostname) {
+    return hostname === 'localhost'
+      || hostname === '127.0.0.1'
+      || /^192\.168\.\d{1,3}\.\d{1,3}$/.test(hostname)
+      || /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)
+      || /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(hostname);
+  }
+
+  const IS_LOCAL_DEV = isLocalDevHost(location.hostname);
+  const WS_SERVER = IS_LOCAL_DEV
+    ? `ws://${location.hostname}:3001`
     : 'wss://REMPLACER-PAR-URL-RENDER.onrender.com';
+  // file:// (double-clic sur index.html) donne un hostname vide -> ni local
+  // ni configuré. On le détecte pour donner un message clair plutôt que de
+  // laisser les 8 tentatives de reconnexion échouer en silence.
+  const WS_SERVER_CONFIGURED = IS_LOCAL_DEV || !WS_SERVER.includes('REMPLACER');
 
   const $ = (sel) => document.querySelector(sel);
 
@@ -192,6 +208,12 @@
   let reconnectAttempts = 0;
 
   function wsConnect(sessionId, role, isRetry = false) {
+    if (!WS_SERVER_CONFIGURED) {
+      const msg = 'Serveur non configuré (voir claude.md § Hébergement)';
+      if (role === 'client') clientSetStatus(msg); else masterSetStatus(msg);
+      return;
+    }
+
     wsSessionId = sessionId;
     wsRole = role;
     wsIntentional = false;
@@ -367,14 +389,17 @@
   function renderQr(code) {
     // La lib QR vient d'un CDN — un blocage (ad-blocker, offline, wifi de salle)
     // ne doit jamais empêcher la connexion WS qui suit. Fallback : code texte seul.
+    $('#qr-canvas').hidden = false;
+    $('#qr-hint').hidden = true;
     if (typeof QRCode === 'undefined') {
       console.warn('[qr] bibliothèque indisponible — code texte uniquement');
       $('#qr-canvas').hidden = true;
+      $('#qr-hint').hidden = false;
       return;
     }
     const url = `${location.origin}${location.pathname}?join=${code}`;
     QRCode.toCanvas($('#qr-canvas'), url, { width: 220, margin: 1 }, (err) => {
-      if (err) { console.error('[qr]', err); $('#qr-canvas').hidden = true; }
+      if (err) { console.error('[qr]', err); $('#qr-canvas').hidden = true; $('#qr-hint').hidden = false; }
     });
   }
 

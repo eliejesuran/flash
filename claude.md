@@ -1,5 +1,5 @@
 # Flash — Light Show Synchronisé
-**v2026-07-16a** · Elie JESURAN · GPL
+**v2026-07-16b** · Elie JESURAN · GPL
 
 ## Concept
 Un téléphone **maître** joue un fichier audio et diffuse une intensité lumineuse en temps réel à N téléphones **clients**, qui rejoignent la session en scannant un QR code. Chaque client fait varier son écran (et sa torche si dispo) en synchro avec la musique.
@@ -42,7 +42,7 @@ Un seul maître par session : `identify role=master` rejeté (`MASTER_TAKEN`) si
 
 ## Rejoindre une session
 Deux façons, en plus de la saisie manuelle (5 caractères sans I/O/0/1 ambigus) :
-- **QR affiché par le maître** (`qrcode@1.5.3`, CDN jsdelivr) encodant `${location.origin}${location.pathname}?join={code}` → scan via **appareil photo natif**. Dégradation gracieuse déjà en place : si le CDN est bloqué/hors-ligne, `renderQr()` masque juste le canvas sans jamais bloquer `wsConnect()` (bug réel trouvé et corrigé — voir historique).
+- **QR affiché par le maître** (`qrcode@1.5.3`, CDN jsdelivr) encodant `${location.origin}${location.pathname}?join={code}` → scan via **appareil photo natif**. Dégradation gracieuse déjà en place : si le CDN est bloqué/hors-ligne, `renderQr()` masque le canvas et affiche `#qr-hint` ("QR indisponible — utilise le code") au lieu de laisser un vide muet — `wsConnect()` n'est jamais bloqué par cet échec (bug réel trouvé et corrigé — voir historique).
 - **Scanner in-app** (bouton "📷 Scanner" sur l'accueil) : `BarcodeDetector` natif uniquement (Chrome/Edge/Android + Safari 17+), **pas de lib CDN** — on a déjà eu un bug à cause d'un CDN bloqué pour l'encodeur QR, inutile de dupliquer ce risque de fragilité côté scan. Bouton caché si `'BarcodeDetector' in window` est faux (Firefox notamment) ; code manuel ou scan natif restent disponibles. Décode soit l'URL `?join=`, soit un code brut. Overlay plein écran avec flux vidéo + cadre viewfinder CSS, polling `detect()` toutes les 250ms, caméra coupée proprement à la fermeture.
 
 ## Écrans
@@ -56,9 +56,12 @@ Le maître choisit une couleur (défaut blanc = comportement d'origine). Le serv
 `setupTorch()` : `getUserMedia({video:{facingMode:'environment', width/height ideal:64}})` (résolution minimale, le flux n'est jamais affiché) → `track.getCapabilities().torch` détermine le mode. Si dispo : `torchLoop()` auto-entretenue (boucle `setTimeout` qui relit `latestIntensity` à chaque tick de fenêtre 200ms) — **découplée du débit réseau des cues**, pour un vrai cycle on/off stable plutôt qu'un toggle au rythme des messages entrants (~30Hz, trop instable pour le hardware).
 
 ## Hébergement
-Front : GitHub Pages, aucune Action nécessaire (statique, pas de build)
+Front : GitHub Pages (pas encore activé — 404 sur l'API Pages au 16 juillet), aucune Action nécessaire (statique, pas de build)
 Serveur : Render (root dir `server/`, build `npm install`, start `npm start`) + UptimeRobot ping `/healthz` toutes les 5min (anti-sleep free tier)
-**TODO avant déploiement** : remplacer `WS_SERVER` (`index.html:158`) par l'URL Render réelle une fois le service créé.
+**TODO avant déploiement réel** : remplacer `WS_SERVER` (`index.html:170`) par l'URL Render une fois le service créé, et activer Pages.
+
+### Tester en local sans Render
+`WS_SERVER` détecte `localhost`/`127.0.0.1` **et les IP réseau local** (`192.168.*`, `10.*`, `172.16-31.*`) et pointe alors vers `ws://<même hôte>:3001` — ça permet de tester depuis un vrai téléphone sur le même wifi que la machine qui fait tourner `server.js`, sans rien déployer. Le serveur autorise ces origines (`LOCAL_NETWORK_ORIGIN` dans `server.js`). **Piège** : ouvrir `index.html` en double-clic (`file://`) ne matche aucun de ces cas (`location.hostname` est vide) → `WS_SERVER_CONFIGURED` est `false`, message clair affiché au lieu de tenter une connexion vouée à l'échec. Il faut servir le dossier via un vrai serveur HTTP (`python3 -m http.server 5500` par ex.) en plus de `node server/server.js`.
 
 ## Backlog
 **Livré (v1)** : join + cue broadcast naïf · flash écran · torche Android best-effort avec repli écran · fichier audio local + Web Audio API (bandes basses → intensité) · dégradation gracieuse QR
@@ -66,4 +69,4 @@ Serveur : Render (root dir `server/`, build `npm install`, start `npm start`) + 
 **v2+** : compensation d'offset horloge pour un vrai calcul de latence (le `ping/pong` applicatif existe déjà, l'offset n'est pas encore calculé/appliqué) · interpolation client entre deux `cue` (actuellement saut direct) · presets couleur / palette · PWA/manifest (comme setlist) · multi-peers stress test (>20) · token de session pour fiabiliser la reprise de rôle maître (au lieu de compter sur le seul heartbeat)
 
 ---
-*Màj 16 juillet 2026*
+*Màj 16 juillet 2026 (b)*

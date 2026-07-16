@@ -27,6 +27,11 @@ const ALLOW_NULL_ORIGIN = true;
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX       = 10;
 
+// IP réseau local (test depuis un vrai téléphone sur le même wifi que le
+// serveur) : accès restreint au LAN de toute façon, pas un élargissement
+// notable de la surface d'attaque publique.
+const LOCAL_NETWORK_ORIGIN = /^http:\/\/(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?$/;
+
 // ─── État en mémoire ──────────────────────────────────────────────────────────
 
 const sessions  = new Map();   // sessionId → Session
@@ -122,7 +127,8 @@ const wss = new WebSocketServer({
 
     const originOk = !origin
       || (ALLOW_NULL_ORIGIN && origin === 'null')
-      || ALLOWED_ORIGINS.some(o => origin.startsWith(o));
+      || ALLOWED_ORIGINS.some(o => origin.startsWith(o))
+      || LOCAL_NETWORK_ORIGIN.test(origin);
     if (!originOk) {
       console.warn(`[blocked] origin="${origin}" ip=${ip}`);
       return cb(false, 403, 'Forbidden');
