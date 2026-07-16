@@ -75,8 +75,16 @@ function broadcast(session, obj, exclude = null) {
   }
 }
 
-function peersUpdate(session) {
-  broadcast(session, { type: 'peers_update', peers: session.clients.size });
+// Compte torches/écrans séparément parmi les clients (le maître n'a ni l'un ni
+// l'autre) et diffuse le détail à tout le monde. En dessous de 3 appareils, le
+// front affiche juste le total (peu d'intérêt à détailler un petit groupe) ;
+// à partir de 3, le détail devient plus lisible — même seuil que la palette de
+// couleurs séparées, voir recomputeColors. `_torch` vaut false par défaut (voir
+// case 'identify') jusqu'à ce que le client confirme via 'capability'.
+function broadcastCounts(session) {
+  const clientList = [...session.clients].filter((ws) => ws !== session.master);
+  const torch = clientList.filter((ws) => ws._torch === true).length;
+  broadcast(session, { type: 'peers_update', peers: clientList.length, torch, screen: clientList.length - torch });
 }
 
 const BANDS = ['bass', 'mid', 'treble'];
@@ -99,6 +107,73 @@ function recomputeRoles(session) {
     else if (i < 3) role = BANDS[i];
     else role = BANDS[Math.floor(Math.random() * 3)];
     send(ws, { type: 'role', role });
+  });
+}
+
+// ─── Couleurs écran par appareil ────────────────────────────────────────────
+// Sous les 3 appareils, tout le monde reprend exactement la couleur choisie par
+// le maître (session.baseColor) — petit groupe, pas besoin de varier. À partir
+// de 3, chaque client reçoit une teinte différente (rotation par index sur le
+// cercle chromatique) pour casser l'uniformité "tout le monde pareil" côté
+// écran, comme les rôles cassent déjà l'uniformité côté torche. Si la couleur
+// de base est neutre (blanc par défaut, saturation quasi nulle), la teinte de
+// rotation elle-même n'a pas de sens -> on part d'un rouge vif par défaut pour
+// que la palette soit visible plutôt que de rester grise.
+function hexToHsl(hex) {
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  if (max === min) return { h: 0, s: 0, l };
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h;
+  switch (max) {
+    case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+    case g: h = (b - r) / d + 2; break;
+    default: h = (r - g) / d + 4;
+  }
+  return { h: h * 60, s, l };
+}
+
+function hslToHex(h, s, l) {
+  h = (((h % 360) + 360) % 360) / 360;
+  const hue2rgb = (p, q, t) => {
+    if (t < 0) t += 1;
+    if (t > 1) t -= 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  };
+  let r, g, b;
+  if (s === 0) {
+    r = g = b = l;
+  } else {
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    r = hue2rgb(p, q, h + 1 / 3);
+    g = hue2rgb(p, q, h);
+    b = hue2rgb(p, q, h - 1 / 3);
+  }
+  const toHex = (v) => Math.round(v * 255).toString(16).padStart(2, '0');
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+function paletteColorFor(baseHex, index, n) {
+  if (n < 3) return baseHex;
+  let { h, s, l } = hexToHsl(baseHex);
+  if (s < 0.1) { h = 0; s = 0.75; l = 0.55; }
+  h = h + index * (360 / n);
+  return hslToHex(h, s, l);
+}
+
+function recomputeColors(session) {
+  const clientList = [...session.clients].filter((ws) => ws !== session.master);
+  const n = clientList.length;
+  clientList.forEach((ws, i) => {
+    send(ws, { type: 'color', color: paletteColorFor(session.baseColor, i, n) });
   });
 }
 
@@ -128,7 +203,7 @@ function getOrCreateSession(id) {
     expireSession(oldest.id);
   }
 
-  const session = { id, master: null, clients: new Set(), expireAt: 0, timer: null, lastCueAt: 0 };
+  const session = { id, master: null, clients: new Set(), expireAt: 0, timer: null, lastCueAt: 0, baseColor: '#ffffff' };
   sessions.set(id, session);
   console.log(`[session] ${id} créée — ${sessions.size} session(s) active(s)`);
   return session;
@@ -222,12 +297,21 @@ wss.on('connection', (ws, req) => {
             return;
           }
           session.master = ws;
+        } else {
+          ws._torch = false; // écran par défaut tant que 'capability' n'a pas confirmé la torche
         }
 
-        send(ws, { type: 'joined', sessionId, role, peers: session.clients.size, hasMaster: !!session.master });
+        const clientList = [...session.clients].filter((c) => c !== session.master);
+        const torch = clientList.filter((c) => c._torch === true).length;
+        send(ws, {
+          type: 'joined', sessionId, role,
+          peers: clientList.length, torch, screen: clientList.length - torch,
+          hasMaster: !!session.master,
+        });
         broadcast(session, { type: 'master_status', hasMaster: !!session.master }, ws);
-        peersUpdate(session);
         recomputeRoles(session);
+        recomputeColors(session);
+        broadcastCounts(session);
         break;
       }
 
@@ -255,7 +339,15 @@ wss.on('connection', (ws, req) => {
         if (ws !== session.master) return;
         const color = typeof msg.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(msg.color) ? msg.color : null;
         if (!color) return;
-        broadcast(session, { type: 'color', color }, ws);
+        session.baseColor = color;
+        recomputeColors(session); // repropage, dérivée par client si >=3 (voir § Couleurs écran par appareil)
+        break;
+      }
+
+      case 'capability': {
+        if (ws === session.master) return; // le maître n'a pas de rôle torche/écran
+        ws._torch = msg.torch === true;
+        broadcastCounts(session);
         break;
       }
 
@@ -281,8 +373,9 @@ wss.on('connection', (ws, req) => {
     }
 
     if (session.clients.size > 0) {
-      peersUpdate(session);
       recomputeRoles(session);
+      recomputeColors(session);
+      broadcastCounts(session);
     } else {
       expireSession(sessionId); // session vide → pas besoin d'attendre le TTL
     }

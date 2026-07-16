@@ -186,7 +186,7 @@
       <img id="qr-img" alt="QR de la session" hidden>
       <p id="qr-hint" class="sub" hidden>QR indisponible (réseau) — utilise le code</p>
       <div class="row">
-        <span class="badge"><span id="master-peers">0</span> connecté(s)</span>
+        <span id="master-peers" class="badge">0 connecté(s)</span>
         <span id="master-status" class="badge">Connexion...</span>
       </div>
     </div>
@@ -214,7 +214,7 @@
     <div class="client-ui">
       <span id="client-status" class="badge">Connexion...</span>
       <div class="row">
-        <span class="badge"><span id="client-peers">0</span> connecté(s)</span>
+        <span id="client-peers" class="badge">0 connecté(s)</span>
         <span id="torch-badge" class="badge">…</span>
       </div>
       <div class="row">
@@ -321,6 +321,12 @@
       if (ws !== socket) return;
       reconnectAttempts = 0;
       wsSend({ type: 'identify', role });
+      // Une reconnexion ouvre un nouveau socket côté serveur (torche/écran pas
+      // encore su pour celui-ci) : on renvoie ce qu'on sait déjà côté client
+      // (torchSupported ne change pas entre deux reconnexions du même client).
+      // Sur la toute première connexion, setupTorch() renvoie la vraie valeur
+      // dès qu'elle est connue (ce premier envoi vaut juste "écran" par défaut).
+      if (role === 'client') wsSend({ type: 'capability', torch: torchSupported });
       pingInterval = setInterval(() => wsSend({ type: 'ping' }), 20000);
       if (role === 'master') masterSetStatus('Connecté');
     });
@@ -339,7 +345,7 @@
 
       if (wsRole === 'client') {
         clientSetStatus('Connexion perdue — reconnexion...');
-        clientApplyCue(0, 0, 0); // ne reste pas figé sur la dernière couleur/torche
+        clientResetDisplay(); // ne reste pas figé sur la dernière couleur/torche
       } else if (wsRole === 'master') {
         masterSetStatus('Connexion perdue — reconnexion...');
       }
@@ -375,20 +381,20 @@
   function handleWsMessage(msg) {
     switch (msg.type) {
       case 'joined':
-        setPeerCount(msg.peers);
+        setPeerCount(msg.torch, msg.screen);
         if (wsRole === 'client') clientSetMasterStatus(msg.hasMaster);
         break;
       case 'master_status':
         if (wsRole === 'client') clientSetMasterStatus(msg.hasMaster);
         break;
       case 'peers_update':
-        setPeerCount(msg.peers);
+        setPeerCount(msg.torch, msg.screen);
         break;
       case 'cue':
         if (wsRole === 'client') clientApplyCue(msg.bass, msg.mid, msg.treble);
         break;
       case 'track_control':
-        if (wsRole === 'client' && msg.action === 'pause') clientApplyCue(0, 0, 0);
+        if (wsRole === 'client' && msg.action === 'pause') clientResetDisplay();
         break;
       case 'color':
         if (wsRole === 'client') clientSetColor(msg.color);
@@ -417,9 +423,15 @@
     showScreen('home');
   }
 
-  function setPeerCount(n) {
-    $('#master-peers').textContent = n;
-    $('#client-peers').textContent = n;
+  // En dessous de 3 appareils, un simple total suffit (petit groupe, peu d'intérêt
+  // à détailler). À partir de 3, le détail torche/écran devient plus lisible qu'un
+  // total seul — et c'est aussi le seuil qui déclenche la palette de couleurs
+  // séparées par appareil (voir recomputeColors côté serveur).
+  function setPeerCount(torch, screen) {
+    const total = torch + screen;
+    const text = total < 3 ? `${total} connecté(s)` : `🔦 ${torch} · 📱 ${screen}`;
+    $('#master-peers').textContent = text;
+    $('#client-peers').textContent = text;
   }
 
   function masterSetStatus(text) {
@@ -636,7 +648,15 @@
       // Plancher proportionnel à l'énergie courante : entre deux coups nets,
       // l'affichage "respire" avec le volume réel au lieu de tomber à zéro et
       // sembler mort pendant un passage soutenu/peu percussif.
-      return Math.max(envelope, energy * 0.3);
+      // 0.6 et pas 0.3 : pendant les ~0.7s de remplissage de `history`, la
+      // moyenne est quasi nulle donc CHAQUE tick est un "beat" -> tout tourne
+      // à pleine énergie (rendu vif). Une fois la fenêtre remplie, en passage
+      // soutenu l'énergie ne dépasse plus sa propre moyenne ×1.5, les beats
+      // se raréfient et le rendu retombe sur ce plancher — à 0.3 la chute
+      // était brutale et vécue comme "les couleurs perdent en intensité après
+      // ~1 seconde". 0.6 garde un niveau soutenu proche du rendu de départ
+      // tout en laissant les vrais beats ressortir au-dessus.
+      return Math.max(envelope, energy * 0.6);
     };
   }
 
@@ -731,6 +751,21 @@
     return Math.min(1, Math.pow(v, SCREEN_GAMMA) * SCREEN_GAIN);
   }
 
+  // Avec une couleur de base blanche/neutre, les 3 bandes sont presque toujours
+  // un peu actives en même temps (le plancher de createBandEnvelope garantit
+  // qu'aucune ne tombe jamais vraiment à 0) -> r≈g≈b la plupart du temps ->
+  // gris/pastel "fade" même avec le boost gamma/gain ci-dessus (qui ne touche
+  // que la luminosité, pas la saturation). On étire ensuite le contraste des 3
+  // canaux autour de leur moyenne : un vrai écart entre bandes ressort en
+  // couleur franche, et 3 canaux réellement égaux (silence, ou blanc plein)
+  // restent inchangés (delta nul -> pas de teinte inventée depuis du bruit).
+  const SCREEN_SATURATION = 2;
+  function boostSaturation(r, g, b) {
+    const mean = (r + g + b) / 3;
+    const stretch = (v) => Math.max(0, Math.min(255, mean + (v - mean) * SCREEN_SATURATION));
+    return [stretch(r) | 0, stretch(g) | 0, stretch(b) | 0];
+  }
+
   // Le rôle assigné par le serveur (voir server.js recomputeRoles) détermine
   // quelle(s) bande(s) pilotent la torche de CE client — pas la même pour tout
   // le monde, pour casser l'effet "tout le monde flashe en même temps" trop
@@ -748,6 +783,30 @@
     }
   }
 
+  // Lissage exponentiel des 3 bandes reçues : sans ça, chaque cue (jusqu'à ~40Hz)
+  // fait sauter écran ET torche instantanément à la valeur brute, ce qui lit comme
+  // un stroboscope même hors des vrais beats. On rapproche latestBass/Mid/Treble de
+  // la cible au lieu d'y sauter -> montées/descentes perceptibles mais plus douces.
+  // ALPHA plus petit = plus lissé (mais plus "en retard" sur le beat) ; ne s'applique
+  // qu'aux cues réels — un reset (déconnexion/pause) doit rester un snap immédiat,
+  // voir clientResetDisplay ci-dessous.
+  const CUE_SMOOTHING_ALPHA = 0.45;
+  function smoothTo(prev, target) {
+    return prev + (target - prev) * CUE_SMOOTHING_ALPHA;
+  }
+
+  // Calcule et peint le rendu écran + réveille la torche à partir de l'état courant
+  // (latestBass/Mid/Treble/Intensity). Partagé entre le chemin lissé (clientApplyCue)
+  // et le reset instantané (clientResetDisplay) pour ne pas dupliquer le calcul RGB.
+  function renderDisplay() {
+    const r = currentColor.r * boostForDisplay(latestBass);
+    const g = currentColor.g * boostForDisplay(latestMid);
+    const b = currentColor.b * boostForDisplay(latestTreble);
+    const [r2, g2, b2] = boostSaturation(r, g, b);
+    $('#flash-zone').style.backgroundColor = `rgb(${r2},${g2},${b2})`;
+    if (torchSupported && !torchLoopActive) torchLoop();
+  }
+
   // La couleur choisie par le maître est une teinte/palette, pas une valeur figée :
   // chaque canal RGB suit l'énergie de sa propre bande de fréquence, donc la
   // couleur affichée évolue réellement avec la musique (basses -> rouge, médiums
@@ -756,21 +815,30 @@
   // physique ne peut pas être teintée) et suit `myRole`, pas systématiquement les
   // aigus comme avant.
   function clientApplyCue(bass, mid, treble) {
-    latestBass = Math.max(0, Math.min(1, bass));
-    latestMid = Math.max(0, Math.min(1, mid));
-    latestTreble = Math.max(0, Math.min(1, treble));
+    const targetBass = Math.max(0, Math.min(1, bass));
+    const targetMid = Math.max(0, Math.min(1, mid));
+    const targetTreble = Math.max(0, Math.min(1, treble));
+    latestBass = smoothTo(latestBass, targetBass);
+    latestMid = smoothTo(latestMid, targetMid);
+    latestTreble = smoothTo(latestTreble, targetTreble);
     latestIntensity = roleIntensity(myRole, latestBass, latestMid, latestTreble);
+    renderDisplay();
+  }
 
-    const r = (currentColor.r * boostForDisplay(latestBass)) | 0;
-    const g = (currentColor.g * boostForDisplay(latestMid)) | 0;
-    const b = (currentColor.b * boostForDisplay(latestTreble)) | 0;
-    $('#flash-zone').style.backgroundColor = `rgb(${r},${g},${b})`;
-    if (torchSupported && !torchLoopActive) torchLoop();
+  // Reset instantané (pas de lissage) : utilisé à la déconnexion et à la pause,
+  // où l'écran DOIT immédiatement cesser de mentir sur l'état de la connexion/lecture
+  // plutôt que de lisser progressivement vers le noir (voire, avec un seul appel,
+  // rester figé à mi-chemin indéfiniment faute de nouveaux cues pour continuer le lissage).
+  function clientResetDisplay() {
+    latestBass = latestMid = latestTreble = 0;
+    latestIntensity = 0;
+    renderDisplay();
   }
 
   async function setupTorch() {
     if (!navigator.mediaDevices?.getUserMedia) {
       $('#torch-badge').textContent = '📱 Mode écran';
+      wsSend({ type: 'capability', torch: false });
       return;
     }
     try {
@@ -791,6 +859,9 @@
     } catch {
       $('#torch-badge').textContent = '📱 Mode écran';
     }
+    // Le serveur compte torches/écrans séparément (voir § Rôles torche) — sans ce
+    // rapport il ne peut pas savoir si CE client a réellement obtenu la torche.
+    wsSend({ type: 'capability', torch: torchSupported });
   }
 
   // Boucle auto-entretenue, découplée du débit réseau des cues :
