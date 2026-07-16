@@ -79,6 +79,29 @@ function peersUpdate(session) {
   broadcast(session, { type: 'peers_update', peers: session.clients.size });
 }
 
+const BANDS = ['bass', 'mid', 'treble'];
+
+// Répartit les bandes de fréquence entre les torches des clients connectés,
+// pour casser l'effet "tout le monde flashe pareil en même temps" (trop
+// stroboscope à plusieurs torches synchronisées) : 1 client -> intensité
+// générale ; 2 -> aigus / moyenne(médium+graves) ; 3 -> une bande chacun ;
+// au-delà, bande aléatoire par client supplémentaire. `session.clients` est
+// un Set donc conserve l'ordre d'arrivée ; filtrer le maître donne l'ordre
+// des clients. Recalculé à chaque connexion/déconnexion d'un client.
+function recomputeRoles(session) {
+  const clientList = [...session.clients].filter((ws) => ws !== session.master);
+  const n = clientList.length;
+
+  clientList.forEach((ws, i) => {
+    let role;
+    if (n === 1) role = 'overall';
+    else if (n === 2) role = i === 0 ? 'treble' : 'mid_bass';
+    else if (i < 3) role = BANDS[i];
+    else role = BANDS[Math.floor(Math.random() * 3)];
+    send(ws, { type: 'role', role });
+  });
+}
+
 function touch(session) {
   clearTimeout(session.timer);
   session.expireAt = Date.now() + SESSION_TTL_MS;
@@ -204,6 +227,7 @@ wss.on('connection', (ws, req) => {
         send(ws, { type: 'joined', sessionId, role, peers: session.clients.size, hasMaster: !!session.master });
         broadcast(session, { type: 'master_status', hasMaster: !!session.master }, ws);
         peersUpdate(session);
+        recomputeRoles(session);
         break;
       }
 
@@ -258,6 +282,7 @@ wss.on('connection', (ws, req) => {
 
     if (session.clients.size > 0) {
       peersUpdate(session);
+      recomputeRoles(session);
     } else {
       expireSession(sessionId); // session vide → pas besoin d'attendre le TTL
     }

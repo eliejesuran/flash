@@ -7,6 +7,10 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#0a0a12" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#f4f4fa" media="(prefers-color-scheme: light)">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <title>Flash</title>
 <style>
   :root {
@@ -389,6 +393,9 @@
       case 'color':
         if (wsRole === 'client') clientSetColor(msg.color);
         break;
+      case 'role':
+        if (wsRole === 'client') clientSetRole(msg.role);
+        break;
       case 'error':
         onWsError(msg);
         break;
@@ -688,6 +695,7 @@
     clientSetStatus('Connexion...');
     currentColor = { r: 255, g: 255, b: 255 };
     latestBass = latestMid = latestTreble = 0;
+    myRole = 'overall';
     wsConnect(code, 'client');
     setupTorch();
     requestWakeLock();
@@ -708,23 +716,54 @@
     clientApplyCue(latestBass, latestMid, latestTreble); // ré-applique tout de suite avec la nouvelle teinte
   }
 
+  function clientSetRole(role) {
+    myRole = role;
+    clientApplyCue(latestBass, latestMid, latestTreble); // la torche reflète le nouveau rôle sans attendre le prochain cue
+  }
+
+  // Rendu écran volontairement "boosté" par rapport au signal analysé brut :
+  // une gamma <1 remonte les valeurs faibles/moyennes (l'oeil les perçoit comme
+  // plus vives), un léger gain pousse plus facilement vers le blanc plein.
+  // Purement cosmétique — n'affecte ni latestBass/Mid/Treble (utilisés par le
+  // rôle torche ci-dessous) ni le cue envoyé, seulement ce qui s'affiche.
+  const SCREEN_GAMMA = 0.55, SCREEN_GAIN = 1.15;
+  function boostForDisplay(v) {
+    return Math.min(1, Math.pow(v, SCREEN_GAMMA) * SCREEN_GAIN);
+  }
+
+  // Le rôle assigné par le serveur (voir server.js recomputeRoles) détermine
+  // quelle(s) bande(s) pilotent la torche de CE client — pas la même pour tout
+  // le monde, pour casser l'effet "tout le monde flashe en même temps" trop
+  // stroboscope quand plusieurs torches sont allumées simultanément.
+  let myRole = 'overall';
+
+  function roleIntensity(role, bass, mid, treble) {
+    switch (role) {
+      case 'bass': return bass;
+      case 'mid': return mid;
+      case 'treble': return treble;
+      case 'mid_bass': return (mid + bass) / 2;
+      case 'overall':
+      default: return (bass + mid + treble) / 3;
+    }
+  }
+
   // La couleur choisie par le maître est une teinte/palette, pas une valeur figée :
   // chaque canal RGB suit l'énergie de sa propre bande de fréquence, donc la
   // couleur affichée évolue réellement avec la musique (basses -> rouge, médiums
   // -> vert, aigus -> bleu, pondérés par la teinte). En blanc (défaut), c'est une
   // vraie visualisation spectrale. La torche reste en niveaux de gris (une torche
-  // physique ne peut pas être teintée) et suit les aigus : transitoires plus nets
-  // (hi-hats/cymbales) que les basses, souvent plus soutenues donc moins nettes
-  // à détecter proprement.
+  // physique ne peut pas être teintée) et suit `myRole`, pas systématiquement les
+  // aigus comme avant.
   function clientApplyCue(bass, mid, treble) {
     latestBass = Math.max(0, Math.min(1, bass));
     latestMid = Math.max(0, Math.min(1, mid));
     latestTreble = Math.max(0, Math.min(1, treble));
-    latestIntensity = latestTreble;
+    latestIntensity = roleIntensity(myRole, latestBass, latestMid, latestTreble);
 
-    const r = (currentColor.r * latestBass) | 0;
-    const g = (currentColor.g * latestMid) | 0;
-    const b = (currentColor.b * latestTreble) | 0;
+    const r = (currentColor.r * boostForDisplay(latestBass)) | 0;
+    const g = (currentColor.g * boostForDisplay(latestMid)) | 0;
+    const b = (currentColor.b * boostForDisplay(latestTreble)) | 0;
     $('#flash-zone').style.backgroundColor = `rgb(${r},${g},${b})`;
     if (torchSupported && !torchLoopActive) torchLoop();
   }

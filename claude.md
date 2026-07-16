@@ -1,7 +1,7 @@
 # Flash — Light Show Synchronisé
-**v2026-07-16i** · Elie JESURAN · GPL
+**v2026-07-16j** · Elie JESURAN · GPL
 
-Maître (téléphone) lit un fichier audio local → analyse 3 bandes de fréquence en temps réel → diffuse à N clients qui varient écran/torche en rythme. Join par QR, code, ou scan in-app (fonctionne sur iOS aussi, voir § Invariants). Thème clair/sombre selon l'appareil.
+Maître (téléphone) lit un fichier audio local → analyse 3 bandes de fréquence en temps réel → diffuse à N clients qui varient écran/torche en rythme. Join par QR, code, ou scan in-app (fonctionne sur iOS aussi, voir § Invariants). Thème clair/sombre selon l'appareil, installable en PWA.
 
 ## Stack
 | | |
@@ -13,6 +13,7 @@ Maître (téléphone) lit un fichier audio local → analyse 3 bandes de fréque
 | Dev local | `.claude/launch.json` : `flash-server` (:3001) + `flash-front` (:5500, `python3 -m http.server`) |
 | Test réel sans Render | `WS_SERVER` reconnaît aussi les IP réseau local (`192.168.*`, `10.*`, `172.16-31.*`) → même hôte:3001. **`file://` (double-clic) ne marche pas** (hostname vide, ni local ni configuré — message clair affiché plutôt qu'une tentative vouée à l'échec) |
 | Thème | Variables CSS dans `:root` (dark, défaut) + `@media (prefers-color-scheme: light)` (override) — pas de toggle manuel, suit l'appareil |
+| PWA | `manifest.json` + `icons/` (192/512/apple-touch, générées via `node-canvas`, source `icons/icon.svg`) — "Ajouter à l'écran d'accueil" sur mobile. Pas de service worker (l'app a besoin du WS en direct pour fonctionner, un cache offline n'apporterait rien) |
 | TODO | UptimeRobot sur `/healthz` (5min) — pas configuré, Render s'endort après inactivité (cold start ~10-60s) |
 
 ## Protocole WS
@@ -27,10 +28,23 @@ Maître (téléphone) lit un fichier audio local → analyse 3 bandes de fréque
 | m→c | `cue` | `{bass,mid,treble:0..1,ts}` — ~30Hz |
 | m→c | `track_control` | `{action:'play'\|'pause'\|'seek',position,ts}` |
 | m→c | `color` | `{color:'#rrggbb'}` — envoyé au changement seulement |
+| s→c | `role` | `{role:'overall'\|'bass'\|'mid'\|'treble'\|'mid_bass'}` — **personnalisé par client** (pas un broadcast), voir § Rôles torche |
 | c↔s | `ping/pong` | applicatif, 20s (distinct du heartbeat protocole WS serveur, 30s) |
 | s→c | `error` | `{code,message}` — `MASTER_TAKEN`·`SESSION_FULL`·`MSG_TOO_LARGE`·`BAD_JSON`·`UNKNOWN_TYPE` |
 
 Un seul maître/session (`ws === session.master`). Pas de `session.state` persisté — un join en cours de session reçoit juste le prochain `cue`. Origin allowlist + rate limit/IP + cap taille message côté serveur.
+
+## Rôles torche (`recomputeRoles()` dans server.js)
+Chaque client a un rôle qui détermine quelle bande pilote SA torche — pas la même pour tout le monde, pour casser l'effet "toutes les torches flashent en même temps" (trop stroboscope). Recalculé pour tous les clients (pas le maître) à chaque connexion/déconnexion d'un client, basé sur l'ordre d'arrivée dans `session.clients` (Set = ordre d'insertion conservé) :
+
+| Nb clients | Rôles assignés |
+|---|---|
+| 1 | `overall` (moyenne des 3 bandes) |
+| 2 | client 1 → `treble` · client 2 → `mid_bass` (moyenne médium+graves) |
+| 3 | client 1 → `bass` · client 2 → `mid` · client 3 → `treble` |
+| 4+ | les 3 premiers gardent le schéma à 3 ; le 4e et suivants reçoivent une bande aléatoire (`bass`/`mid`/`treble`) chacun |
+
+Le message `role` est envoyé individuellement (`send(ws,...)`, pas `broadcast`) — chaque client reçoit potentiellement une valeur différente des autres. Le client stocke `myRole` et recalcule `latestIntensity` (ce qui pilote `torchLoop()`) via `roleIntensity()` à chaque `cue` reçu. La **couleur écran**, elle, reste identique pour tout le monde (les 3 bandes → RGB, indépendant du rôle) — seule la torche varie par appareil.
 
 ## Constantes qui comptent (ne pas re-tuner à l'aveugle)
 | Constante | Valeur | Où |
@@ -48,7 +62,8 @@ Un seul maître/session (`ws === session.master`). Pas de `session.state` persis
 | Rate limit connexions | 60/min/IP | `RATE_LIMIT_MAX` — plusieurs téléphones = 1 IP (NAT wifi de salle), pas juste anti-abus |
 | Heartbeat serveur | ping 30s, `terminate()` si pas de pong | `HEARTBEAT_INTERVAL_MS` |
 | Reconnexion client | backoff 1s→8s, 8 tentatives max | `MAX_RECONNECT_ATTEMPTS` |
-| Torche | fenêtre on/off 200ms, pilotée par `treble` seul | `torchLoop()` |
+| Torche | fenêtre on/off 200ms, pilotée par `myRole` (voir § Rôles torche) | `torchLoop()` |
+| Boost écran | `min(1, v^0.55 × 1.15)` appliqué au rendu RGB uniquement | `boostForDisplay()`, `SCREEN_GAMMA`/`SCREEN_GAIN` — rendu "trop fade" sinon ; n'affecte pas `latestBass/Mid/Treble` (utilisés par le rôle torche) ni le `cue` envoyé |
 
 ## Invariants / pièges déjà mordus une fois — ne pas régresser
 - **iOS = aucune torche, jamais, sur aucun navigateur.** WebKit n'implémente pas `MediaTrackConstraints.torch` ; tout navigateur iOS (Chrome/Firefox/Edge inclus) tourne sur WebKit (imposé par Apple hors UE/DMA, et même sous DMA aucun moteur alternatif ne l'implémente). Écran = mécanisme principal partout, torche = bonus Android/Chromium uniquement.
@@ -61,6 +76,7 @@ Un seul maître/session (`ws === session.master`). Pas de `session.state` persis
 - **Un client qui se reconnecte doit repasser par `clientApplyCue(0,0,0)` immédiatement**, pas attendre le prochain `cue` — sinon l'écran ment sur l'état de la connexion (reste figé sur la dernière couleur).
 - **Pendant un reconnect auto, `MASTER_TAKEN` peut être transitoire** (heartbeat serveur pas encore passé sur l'ancienne connexion morte) — le client retente (`ws._isRetry`) plutôt que d'éjecter l'utilisateur avec une alerte.
 - **`accept` du file input inclut des extensions explicites en plus de `audio/*`** (`.mp3,.m4a,.wav,.aac,.ogg`) — les pickers mobiles filtrent parfois sur un MIME-sniffing incorrect (`.m4a` en particulier est signalé de façon incohérente selon l'OS).
+- **AirPlay-en-tant-que-récepteur est infaisable en web** — pas une question de code à trouver. Devenir un récepteur AirPlay demande une intégration OS native + licence Apple (MFi), aucune API web n'expose ça. Idem pour capter l'audio d'une autre appli en général : bloqué par design sur mobile (sécurité + sandboxing OS), `getDisplayMedia({audio:true})` étant la seule brèche possible et desktop-only. D'où le micro comme seule voie web pour "écouter ce qui joue" (voir § Sprint suivant) — inutile de rouvrir cette question sans un changement d'architecture (appli native).
 
 ## Sprint suivant — capture audio ambiante (micro) au lieu du fichier manuel
 Objectif : le maître ne charge plus un fichier, il "écoute" ce qui joue déjà sur l'appareil (Spotify, Apple Music, YouTube, peu importe l'appli) et diffuse l'analyse en direct.
@@ -68,6 +84,8 @@ Objectif : le maître ne charge plus un fichier, il "écoute" ce qui joue déjà
 **Pourquoi pas un vrai "loopback" système :** aucune API web ne permet de capter "ce que l'OS joue" venant d'une autre appli — bloqué à la fois pour des raisons de sécurité (écoute audio silencieuse d'autres apps) et parce que les OS mobiles ne l'exposent tout simplement pas. `getDisplayMedia({audio:true})` capte de l'audio système/onglet mais desktop-only et inutilisable ici (cible = téléphones).
 
 **Approche retenue : micro ambiant.** `getUserMedia({audio:true})` — le téléphone maître écoute littéralement ce qui sort de son propre haut-parleur (ou d'une enceinte externe à proximité). Fonctionne sur toute plateforme y compris iOS, indépendamment de l'appli source. Contrepartie : qualité dépendante du volume/de la distance/du bruit ambiant — inhérent à l'approche, pas un bug à corriger.
+
+**Astuce qualité, même code** : si un câble aux relie la sortie casque de l'appareil source à l'entrée micro du maître (via adaptateur), `getUserMedia` capte un signal ligne propre au lieu du bruit ambiant — aucun changement de code, juste un setup physique à suggérer dans l'UI/doc utilisateur.
 
 **Piège à ne pas rater en implémentant :** `getUserMedia({audio:true})` seul active par défaut `echoCancellation`/`noiseSuppression`/`autoGainControl` — pensés pour la voix en appel, ils écrasent la dynamique dont la détection de beat a besoin et peuvent supprimer du contenu musical légitime en le prenant pour du bruit/écho. Explicitement désactiver les trois :
 ```js
@@ -81,7 +99,7 @@ navigator.mediaDevices.getUserMedia({
 **Changements UI à prévoir :** remplacer `<input type=file>` par un bouton "Écouter" qui demande la permission micro ; plus de notion play/pause de piste (start/stop d'écoute à la place) ; plus de nom de fichier à afficher, les 3 mini-mètres deviennent le seul retour visuel de fonctionnement. **Question ouverte à trancher au démarrage du sprint** : garder le chargement de fichier comme mode alternatif (signal plus propre, utile pour tester sans bruit ambiant), ou le retirer complètement comme demandé.
 
 ## Backlog
-Compensation d'offset horloge pour la latence réelle (le `ping/pong` applicatif existe, l'offset n'est pas calculé/appliqué) · interpolation client entre deux `cue` (saut direct actuellement) · PWA/manifest (comme `../setlist`) · stress test réel >20 peers · token de session pour fiabiliser la reprise de rôle maître (au lieu du seul heartbeat) · réglages beat-detection exposés en UI si le tuning par défaut ne convient toujours pas à un style de musique donné · gain par bande si une bande reste faible sur certains fichiers sources (raw FFT magnitude naturellement inégale entre graves/aigus selon le mix)
+Compensation d'offset horloge pour la latence réelle (le `ping/pong` applicatif existe, l'offset n'est pas calculé/appliqué) · interpolation client entre deux `cue` (saut direct actuellement) · stress test réel >20 peers · token de session pour fiabiliser la reprise de rôle maître (au lieu du seul heartbeat) · réglages beat-detection exposés en UI si le tuning par défaut ne convient toujours pas à un style de musique donné · gain par bande si une bande reste faible sur certains fichiers sources (raw FFT magnitude naturellement inégale entre graves/aigus selon le mix) · service worker si un jour un mode offline fait sens
 
 ---
-*Màj 16 juillet 2026 (i) — jsQR + QR par API, thème clair/sombre, plan capture micro*
+*Màj 16 juillet 2026 (j) — rôles torche par appareil, boost écran, PWA, jsQR/QR API*
