@@ -57,6 +57,20 @@
 
   #track-name { font-size: .85rem; opacity: .7; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+  input[type=color] {
+    width: 56px; height: 40px; border-radius: 10px; border: 2px solid #2c2c38;
+    background: #161620; padding: 2px; cursor: pointer;
+  }
+
+  /* ── Scanner QR in-app ── */
+  #scan-overlay { position: fixed; inset: 0; z-index: 20; background: #000; }
+  #scan-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .scan-ui {
+    position: relative; z-index: 1; height: 100%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24px;
+  }
+  .scan-frame { width: 220px; height: 220px; border: 3px solid #6c5ce7; border-radius: 16px; box-shadow: 0 0 0 2000px rgba(0,0,0,.5); }
+
   /* ── Écran client : zone plein écran réactive au flash ── */
   #screen-client { position: relative; padding: 0; overflow: hidden; }
   #flash-zone {
@@ -83,19 +97,28 @@
     <span class="divider">— ou —</span>
 
     <input type="text" id="input-code" placeholder="CODE" maxlength="6" autocomplete="off" autocapitalize="characters">
-    <button id="btn-join" class="secondary">Rejoindre</button>
+    <div class="row">
+      <button id="btn-join" class="secondary">Rejoindre</button>
+      <button id="btn-scan" class="secondary" hidden>📷 Scanner</button>
+    </div>
   </div>
 
   <!-- ─── Maître ─── -->
   <div class="screen" id="screen-master" hidden>
     <div id="code-display">----</div>
     <canvas id="qr-canvas"></canvas>
-    <span class="badge"><span id="master-peers">0</span> connecté(s)</span>
+    <div class="row">
+      <span class="badge"><span id="master-peers">0</span> connecté(s)</span>
+      <span id="master-status" class="badge">Connexion...</span>
+    </div>
 
     <input type="file" id="audio-file" accept="audio/*">
     <div id="track-name"></div>
 
-    <button id="btn-play" disabled>▶ Lecture</button>
+    <div class="row">
+      <button id="btn-play" disabled>▶ Lecture</button>
+      <input type="color" id="color-picker" value="#ffffff" title="Couleur du flash écran">
+    </div>
     <div id="meter"><div id="meter-fill"></div></div>
 
     <button id="btn-leave-master" class="danger">Quitter la session</button>
@@ -111,6 +134,15 @@
         <span id="torch-badge" class="badge">…</span>
       </div>
       <button id="btn-leave-client" class="danger">Quitter</button>
+    </div>
+  </div>
+
+  <!-- ─── Scanner QR ─── -->
+  <div id="scan-overlay" hidden>
+    <video id="scan-video" playsinline muted autoplay></video>
+    <div class="scan-ui">
+      <div class="scan-frame"></div>
+      <button id="btn-scan-cancel" class="secondary">Annuler</button>
     </div>
   </div>
 
@@ -145,30 +177,69 @@
   }
 
   // ─── WebSocket ──────────────────────────────────────────────────────────
+  // Reconnexion auto avec backoff : une coupure réseau (wifi de salle, bascule
+  // 4G) ne doit pas figer la session indéfiniment. Combiné au heartbeat serveur
+  // (voir server.js), un maître qui se reconnecte reprend son rôle proprement.
+
+  const MAX_RECONNECT_ATTEMPTS = 8;
 
   let ws = null;
   let wsRole = null;
+  let wsSessionId = null;
+  let wsIntentional = false;
   let pingInterval = null;
+  let reconnectTimer = null;
+  let reconnectAttempts = 0;
 
-  function wsConnect(sessionId, role) {
+  function wsConnect(sessionId, role, isRetry = false) {
+    wsSessionId = sessionId;
     wsRole = role;
-    ws = new WebSocket(`${WS_SERVER}/session/${sessionId}`);
+    wsIntentional = false;
 
-    ws.addEventListener('open', () => {
+    const socket = new WebSocket(`${WS_SERVER}/session/${sessionId}`);
+    socket._isRetry = isRetry;
+    ws = socket;
+
+    socket.addEventListener('open', () => {
+      if (ws !== socket) return;
+      reconnectAttempts = 0;
       wsSend({ type: 'identify', role });
       pingInterval = setInterval(() => wsSend({ type: 'ping' }), 20000);
+      if (role === 'master') masterSetStatus('Connecté');
     });
 
-    ws.addEventListener('message', (ev) => {
+    socket.addEventListener('message', (ev) => {
+      if (ws !== socket) return;
       let msg;
       try { msg = JSON.parse(ev.data); } catch { return; }
       handleWsMessage(msg);
     });
 
-    ws.addEventListener('close', () => {
+    socket.addEventListener('close', () => {
+      if (ws !== socket) return; // ancienne connexion remplacée par un reconnect, on ignore
       clearInterval(pingInterval);
-      if (wsRole === 'client') clientSetStatus('Connexion perdue');
+      if (wsIntentional) return;
+
+      if (wsRole === 'client') {
+        clientSetStatus('Connexion perdue — reconnexion...');
+        clientApplyCue(0); // ne reste pas figé sur la dernière couleur/torche
+      } else if (wsRole === 'master') {
+        masterSetStatus('Connexion perdue — reconnexion...');
+      }
+      scheduleReconnect();
     });
+  }
+
+  function scheduleReconnect() {
+    clearTimeout(reconnectTimer);
+    if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      const msg = 'Connexion impossible — recharge la page';
+      if (wsRole === 'client') clientSetStatus(msg); else masterSetStatus(msg);
+      return;
+    }
+    const delay = Math.min(1000 * 2 ** reconnectAttempts, 8000);
+    reconnectAttempts++;
+    reconnectTimer = setTimeout(() => wsConnect(wsSessionId, wsRole, true), delay);
   }
 
   function wsSend(obj) {
@@ -176,6 +247,10 @@
   }
 
   function wsDisconnect() {
+    wsIntentional = true;
+    clearTimeout(reconnectTimer);
+    reconnectAttempts = 0;
+    wsSessionId = null;
     if (ws) { ws.close(); ws = null; }
     clearInterval(pingInterval);
   }
@@ -198,6 +273,9 @@
       case 'track_control':
         if (wsRole === 'client' && msg.action === 'pause') clientApplyCue(0);
         break;
+      case 'color':
+        if (wsRole === 'client') clientSetColor(msg.color);
+        break;
       case 'error':
         onWsError(msg);
         break;
@@ -205,6 +283,13 @@
   }
 
   function onWsError(msg) {
+    // Pendant un reconnect auto, un MASTER_TAKEN peut être transitoire : le
+    // serveur n'a peut-être pas encore détecté (via heartbeat) que l'ancienne
+    // connexion est morte. On retente plutôt que d'éjecter l'utilisateur.
+    if (msg.code === 'MASTER_TAKEN' && ws?._isRetry) {
+      scheduleReconnect();
+      return;
+    }
     if (msg.code === 'MASTER_TAKEN') alert('Session déjà pilotée par un autre maître.');
     else if (msg.code === 'SESSION_FULL') alert('Session pleine.');
     else return;
@@ -216,6 +301,38 @@
     $('#master-peers').textContent = n;
     $('#client-peers').textContent = n;
   }
+
+  function masterSetStatus(text) {
+    $('#master-status').textContent = text;
+  }
+
+  // ─── Écran actif (wake lock) ────────────────────────────────────────────
+  // Sans ça, le verrouillage d'écran du téléphone coupe rAF/timers et TOUT
+  // s'arrête net — la cause la plus probable d'un "freeze" en usage réel.
+
+  let wakeLock = null;
+  let wakeLockWanted = false;
+
+  function requestWakeLock() {
+    wakeLockWanted = true;
+    acquireWakeLock();
+  }
+
+  function releaseWakeLock() {
+    wakeLockWanted = false;
+    if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+  }
+
+  async function acquireWakeLock() {
+    if (!('wakeLock' in navigator)) return;
+    try { wakeLock = await navigator.wakeLock.request('screen'); } catch { /* refusé, tant pis */ }
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    // Le wake lock est auto-relâché par le navigateur quand l'onglet passe en
+    // arrière-plan — il faut le redemander explicitement au retour.
+    if (wakeLockWanted && document.visibilityState === 'visible') acquireWakeLock();
+  });
 
   // ─── Accueil ────────────────────────────────────────────────────────────
 
@@ -240,7 +357,12 @@
     $('#code-display').textContent = code;
     renderQr(code);
     wsConnect(code, 'master');
+    requestWakeLock();
   }
+
+  $('#color-picker').addEventListener('input', (e) => {
+    wsSend({ type: 'color', color: e.target.value });
+  });
 
   function renderQr(code) {
     // La lib QR vient d'un CDN — un blocage (ad-blocker, offline, wifi de salle)
@@ -331,6 +453,7 @@
     if (playing) { audioEl.pause(); playing = false; }
     cancelAnimationFrame(rafId);
     wsDisconnect();
+    releaseWakeLock();
     showScreen('home');
   });
 
@@ -338,12 +461,15 @@
 
   let torchTrack = null, torchSupported = false, torchTimer = null, torchLoopActive = false;
   let latestIntensity = 0;
+  let currentColor = { r: 255, g: 255, b: 255 }; // blanc par défaut = comportement d'origine
 
   function startClient(code) {
     showScreen('client');
     clientSetStatus('Connexion...');
+    currentColor = { r: 255, g: 255, b: 255 };
     wsConnect(code, 'client');
     setupTorch();
+    requestWakeLock();
   }
 
   function clientSetMasterStatus(hasMaster) {
@@ -354,11 +480,18 @@
     $('#client-status').textContent = text;
   }
 
+  function clientSetColor(hex) {
+    const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+    if (!m) return;
+    currentColor = { r: parseInt(m[1], 16), g: parseInt(m[2], 16), b: parseInt(m[3], 16) };
+    clientApplyCue(latestIntensity); // ré-applique tout de suite avec la nouvelle teinte
+  }
+
   function clientApplyCue(intensity) {
     const v = Math.max(0, Math.min(1, intensity));
     latestIntensity = v;
-    const c = v * 255 | 0;
-    $('#flash-zone').style.backgroundColor = `rgb(${c},${c},${c})`;
+    const r = (currentColor.r * v) | 0, g = (currentColor.g * v) | 0, b = (currentColor.b * v) | 0;
+    $('#flash-zone').style.backgroundColor = `rgb(${r},${g},${b})`;
     if (torchSupported && !torchLoopActive) torchLoop();
   }
 
@@ -428,8 +561,66 @@
   $('#btn-leave-client').addEventListener('click', () => {
     stopTorch();
     wsDisconnect();
+    releaseWakeLock();
     showScreen('home');
   });
+
+  // ─── Scanner QR in-app ──────────────────────────────────────────────────
+  // BarcodeDetector uniquement (Chrome/Edge/Android + Safari 17+) : pas de
+  // lib CDN pour ça, on a déjà eu un bug à cause d'un CDN bloqué pour le QR
+  // encoder (voir renderQr) — inutile de dupliquer ce risque. Sans support,
+  // le bouton reste caché ; code manuel ou scan via l'appareil photo natif.
+
+  const scanSupported = 'BarcodeDetector' in window;
+  if (scanSupported) $('#btn-scan').hidden = false;
+
+  let scanStream = null, scanTimer = null;
+
+  $('#btn-scan').addEventListener('click', startScan);
+  $('#btn-scan-cancel').addEventListener('click', stopScan);
+
+  async function startScan() {
+    let detector;
+    try {
+      detector = new BarcodeDetector({ formats: ['qr_code'] });
+    } catch {
+      alert('Scanner QR indisponible sur ce navigateur.');
+      return;
+    }
+    try {
+      scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    } catch {
+      alert('Accès caméra refusé ou indisponible.');
+      return;
+    }
+    $('#scan-video').srcObject = scanStream;
+    $('#scan-overlay').hidden = false;
+    scanLoop(detector);
+  }
+
+  async function scanLoop(detector) {
+    if (!scanStream) return;
+    try {
+      const codes = await detector.detect($('#scan-video'));
+      const code = codes.length ? extractCode(codes[0].rawValue) : null;
+      if (code) { stopScan(); startClient(code); return; }
+    } catch { /* frame pas encore prête — on retente */ }
+    scanTimer = setTimeout(() => scanLoop(detector), 250);
+  }
+
+  function extractCode(raw) {
+    try {
+      const j = new URL(raw).searchParams.get('join');
+      if (j) return j.toUpperCase();
+    } catch { /* pas une URL — peut-être le code brut */ }
+    return /^[A-Z0-9]{4,8}$/i.test(raw) ? raw.toUpperCase() : null;
+  }
+
+  function stopScan() {
+    clearTimeout(scanTimer);
+    if (scanStream) { scanStream.getTracks().forEach((t) => t.stop()); scanStream = null; }
+    $('#scan-overlay').hidden = true;
+  }
 
   showScreen('home');
 })();

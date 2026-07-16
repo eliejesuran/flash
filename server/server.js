@@ -15,6 +15,7 @@ const MAX_SESSIONS         = 100;
 const MAX_PEERS            = 50;
 const CUE_MIN_INTERVAL_MS  = 25;   // throttle serveur anti-abus (~40Hz max)
 const MAX_MSG_SIZE         = 4096; // les messages sont de petits JSON, 4 Ko est déjà large
+const HEARTBEAT_INTERVAL_MS = 30 * 1000;
 
 const ALLOWED_ORIGINS = [
   'https://eliejesuran.github.io',
@@ -154,6 +155,8 @@ wss.on('connection', (ws, req) => {
 
   session.clients.add(ws);
   ws._role = null;
+  ws._alive = true;
+  ws.on('pong', () => { ws._alive = true; });
   touch(session);
 
   const ip = req.headers['x-forwarded-for']?.split(',')[0].trim()
@@ -217,6 +220,14 @@ wss.on('connection', (ws, req) => {
         break;
       }
 
+      case 'color': {
+        if (ws !== session.master) return;
+        const color = typeof msg.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(msg.color) ? msg.color : null;
+        if (!color) return;
+        broadcast(session, { type: 'color', color }, ws);
+        break;
+      }
+
       case 'ping': {
         send(ws, { type: 'pong', ts: Date.now() });
         break;
@@ -249,6 +260,23 @@ wss.on('connection', (ws, req) => {
     console.error(`[ws error] session=${sessionId}`, err.message);
   });
 });
+
+// Détection des connexions zombies (coupure réseau sans close propre) :
+// sans ça, un maître qui perd le réseau reste "master" côté serveur indéfiniment,
+// et sa reconnexion se fait rejeter en MASTER_TAKEN — plus aucun cue n'est jamais
+// émis, tous les clients restent figés sur la dernière couleur reçue.
+const heartbeatInterval = setInterval(() => {
+  for (const ws of wss.clients) {
+    if (ws._alive === false) {
+      ws.terminate(); // pas de pong depuis le tick précédent → on force le close
+      continue;
+    }
+    ws._alive = false;
+    ws.ping();
+  }
+}, HEARTBEAT_INTERVAL_MS);
+
+wss.on('close', () => clearInterval(heartbeatInterval));
 
 wss.on('listening', () => {
   console.log(`Flash server — ws://localhost:${PORT}`);
