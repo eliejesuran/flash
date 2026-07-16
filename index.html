@@ -165,7 +165,7 @@
     </div>
   </div>
 
-<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/lib/browser.min.js"></script>
 <script>
 (() => {
   'use strict';
@@ -388,8 +388,8 @@
 
   // ─── Maître ─────────────────────────────────────────────────────────────
 
-  let audioCtx = null, analyser = null, audioEl = null, rafId = null;
-  let playing = false, lastCueSentAt = 0;
+  let audioCtx = null, analyser = null, audioEl = null, analysisTimer = null;
+  let playing = false;
   let bandRanges = null; // {bass:[lo,hi], mid:[lo,hi], treble:[lo,hi]} en indices de bin
 
   function startMaster(code) {
@@ -416,7 +416,7 @@
     // ne doit jamais empêcher la connexion WS qui suit. Fallback : code texte seul.
     $(canvasSel).hidden = false;
     $(hintSel).hidden = true;
-    if (typeof QRCode === 'undefined') {
+    if (!('QRCode' in window)) {
       console.warn('[qr] bibliothèque indisponible — code texte uniquement');
       $(canvasSel).hidden = true;
       $(hintSel).hidden = false;
@@ -436,7 +436,7 @@
   function setupAudio(file) {
     if (!audioEl) {
       audioEl = new Audio();
-      audioEl.addEventListener('ended', () => { playing = false; updatePlayButton(); cancelAnimationFrame(rafId); });
+      audioEl.addEventListener('ended', () => { playing = false; updatePlayButton(); clearInterval(analysisTimer); });
     }
     audioEl.src = URL.createObjectURL(file);
 
@@ -470,12 +470,12 @@
       audioEl.pause();
       playing = false;
       wsSend({ type: 'track_control', action: 'pause' });
-      cancelAnimationFrame(rafId);
+      clearInterval(analysisTimer);
     } else {
       await audioEl.play();
       playing = true;
       wsSend({ type: 'track_control', action: 'play' });
-      analysisLoop();
+      analysisTimer = setInterval(analysisTick, 33); // ~30Hz, immunisé au throttling de requestAnimationFrame en arrière-plan
     }
     updatePlayButton();
   });
@@ -490,16 +490,31 @@
   // est comparée à sa moyenne glissante récente — un pic net déclenche une
   // attaque immédiate, puis l'enveloppe redescend en décroissance exponentielle
   // jusqu'au prochain coup. Un vrai flash sur le beat plutôt qu'un flicker.
+  //
+  // v1 déclenchait trop souvent : un signal soutenu et fort (ex. basse continue)
+  // dépasse facilement moyenne×1.25 à répétition, frame après frame, ce qui
+  // donnait un flicker rapide plutôt que des coups nets. Fix : seuil relevé
+  // (×1.5) + période réfractaire (~120ms) qui empêche un nouveau déclenchement
+  // tant que le coup précédent n'a pas eu le temps de redescendre.
+  const MIN_BEAT_INTERVAL_MS = 120;
+
   function createBandEnvelope() {
     const history = [];
     const HISTORY_SIZE = 43; // ~0.7s à 60fps
     let envelope = 0;
-    return (energy) => {
+    let lastBeatAt = -Infinity;
+    return (energy, now) => {
       history.push(energy);
       if (history.length > HISTORY_SIZE) history.shift();
       const avg = history.reduce((a, b) => a + b, 0) / history.length;
-      const isBeat = energy > avg * 1.25 && energy > 0.1;
-      envelope = isBeat ? Math.min(1, energy * 1.15) : envelope * 0.88;
+      const cooldownOk = now - lastBeatAt > MIN_BEAT_INTERVAL_MS;
+      const isBeat = cooldownOk && energy > avg * 1.5 && energy > 0.15;
+      if (isBeat) {
+        envelope = Math.min(1, energy * 1.15);
+        lastBeatAt = now;
+      } else {
+        envelope *= 0.88;
+      }
       return envelope;
     };
   }
@@ -516,32 +531,33 @@
     return (sum / (to - from + 1)) / 255;
   }
 
-  function analysisLoop() {
+  // setInterval plutôt que requestAnimationFrame : rAF est suspendu par le
+  // navigateur quand l'onglet n'est pas au premier plan (indépendant du Wake
+  // Lock, qui ne couvre que le verrouillage d'écran) — cause probable du
+  // "figé sauf si on quitte et revient" en testant sur ordinateur, où changer
+  // d'onglet/fenêtre est courant. setInterval continue de tourner (throttle
+  // beaucoup plus mollement en arrière-plan) donc les cue continuent de partir.
+  function analysisTick() {
     if (!playing) return;
     const data = new Uint8Array(analyser.frequencyBinCount);
     analyser.getByteFrequencyData(data);
+    const now = performance.now();
 
-    const bass = bassEnvelope(bandEnergy(data, bandRanges.bass));
-    const mid = midEnvelope(bandEnergy(data, bandRanges.mid));
-    const treble = trebleEnvelope(bandEnergy(data, bandRanges.treble));
+    const bass = bassEnvelope(bandEnergy(data, bandRanges.bass), now);
+    const mid = midEnvelope(bandEnergy(data, bandRanges.mid), now);
+    const treble = trebleEnvelope(bandEnergy(data, bandRanges.treble), now);
 
     $('#meter-bass').style.width = `${Math.round(bass * 100)}%`;
     $('#meter-mid').style.width = `${Math.round(mid * 100)}%`;
     $('#meter-treble').style.width = `${Math.round(treble * 100)}%`;
 
-    const now = performance.now();
-    if (now - lastCueSentAt >= 33) { // ~30Hz max
-      lastCueSentAt = now;
-      const r3 = (v) => Math.round(v * 1000) / 1000;
-      wsSend({ type: 'cue', bass: r3(bass), mid: r3(mid), treble: r3(treble) });
-    }
-
-    rafId = requestAnimationFrame(analysisLoop);
+    const r3 = (v) => Math.round(v * 1000) / 1000;
+    wsSend({ type: 'cue', bass: r3(bass), mid: r3(mid), treble: r3(treble) });
   }
 
   $('#btn-leave-master').addEventListener('click', () => {
     if (playing) { audioEl.pause(); playing = false; }
-    cancelAnimationFrame(rafId);
+    clearInterval(analysisTimer);
     wsDisconnect();
     releaseWakeLock();
     showScreen('home');
@@ -583,13 +599,15 @@
   // chaque canal RGB suit l'énergie de sa propre bande de fréquence, donc la
   // couleur affichée évolue réellement avec la musique (basses -> rouge, médiums
   // -> vert, aigus -> bleu, pondérés par la teinte). En blanc (défaut), c'est une
-  // vraie visualisation spectrale. La torche reste en niveaux de gris (intensité
-  // = max des 3 bandes) car une torche physique ne peut pas être teintée.
+  // vraie visualisation spectrale. La torche reste en niveaux de gris (une torche
+  // physique ne peut pas être teintée) et suit les aigus : transitoires plus nets
+  // (hi-hats/cymbales) que les basses, souvent plus soutenues donc moins nettes
+  // à détecter proprement.
   function clientApplyCue(bass, mid, treble) {
     latestBass = Math.max(0, Math.min(1, bass));
     latestMid = Math.max(0, Math.min(1, mid));
     latestTreble = Math.max(0, Math.min(1, treble));
-    latestIntensity = Math.max(latestBass, latestMid, latestTreble);
+    latestIntensity = latestTreble;
 
     const r = (currentColor.r * latestBass) | 0;
     const g = (currentColor.g * latestMid) | 0;
