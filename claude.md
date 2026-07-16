@@ -1,5 +1,5 @@
 # Flash — Light Show Synchronisé
-**v2026-07-16b** · Elie JESURAN · GPL
+**v2026-07-16c** · Elie JESURAN · GPL
 
 ## Concept
 Un téléphone **maître** joue un fichier audio et diffuse une intensité lumineuse en temps réel à N téléphones **clients**, qui rejoignent la session en scannant un QR code. Chaque client fait varier son écran (et sa torche si dispo) en synchro avec la musique.
@@ -56,9 +56,9 @@ Le maître choisit une couleur (défaut blanc = comportement d'origine). Le serv
 `setupTorch()` : `getUserMedia({video:{facingMode:'environment', width/height ideal:64}})` (résolution minimale, le flux n'est jamais affiché) → `track.getCapabilities().torch` détermine le mode. Si dispo : `torchLoop()` auto-entretenue (boucle `setTimeout` qui relit `latestIntensity` à chaque tick de fenêtre 200ms) — **découplée du débit réseau des cues**, pour un vrai cycle on/off stable plutôt qu'un toggle au rythme des messages entrants (~30Hz, trop instable pour le hardware).
 
 ## Hébergement
-Front : GitHub Pages (pas encore activé — 404 sur l'API Pages au 16 juillet), aucune Action nécessaire (statique, pas de build)
-Serveur : Render (root dir `server/`, build `npm install`, start `npm start`) + UptimeRobot ping `/healthz` toutes les 5min (anti-sleep free tier)
-**TODO avant déploiement réel** : remplacer `WS_SERVER` (`index.html:170`) par l'URL Render une fois le service créé, et activer Pages.
+Front : GitHub Pages — https://eliejesuran.github.io/flash/ (actif, déploie auto depuis `main`, pas d'Action nécessaire)
+Serveur : Render — https://flash-a9yt.onrender.com (root dir `server/`, build `npm install`, start `npm start`, plan Free)
+**TODO** : UptimeRobot ping `/healthz` toutes les 5min pour éviter la mise en veille du plan Free (pas encore configuré).
 
 ### Tester en local sans Render
 `WS_SERVER` détecte `localhost`/`127.0.0.1` **et les IP réseau local** (`192.168.*`, `10.*`, `172.16-31.*`) et pointe alors vers `ws://<même hôte>:3001` — ça permet de tester depuis un vrai téléphone sur le même wifi que la machine qui fait tourner `server.js`, sans rien déployer. Le serveur autorise ces origines (`LOCAL_NETWORK_ORIGIN` dans `server.js`). **Piège** : ouvrir `index.html` en double-clic (`file://`) ne matche aucun de ces cas (`location.hostname` est vide) → `WS_SERVER_CONFIGURED` est `false`, message clair affiché au lieu de tenter une connexion vouée à l'échec. Il faut servir le dossier via un vrai serveur HTTP (`python3 -m http.server 5500` par ex.) en plus de `node server/server.js`.
@@ -69,4 +69,4 @@ Serveur : Render (root dir `server/`, build `npm install`, start `npm start`) + 
 **v2+** : compensation d'offset horloge pour un vrai calcul de latence (le `ping/pong` applicatif existe déjà, l'offset n'est pas encore calculé/appliqué) · interpolation client entre deux `cue` (actuellement saut direct) · presets couleur / palette · PWA/manifest (comme setlist) · multi-peers stress test (>20) · token de session pour fiabiliser la reprise de rôle maître (au lieu de compter sur le seul heartbeat)
 
 ---
-*Màj 16 juillet 2026 (b)*
+*Màj 16 juillet 2026 (c) — serveur Render en prod*

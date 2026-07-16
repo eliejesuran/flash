@@ -155,7 +155,6 @@
   // Dev local (localhost, 127.0.0.1, ou une IP du réseau local pour tester
   // depuis un vrai téléphone sur le même wifi) → serveur local au même hôte.
   // Sinon → serveur Render.
-  // TODO: remplacer par l'URL réelle une fois le service Render créé (voir claude.md § Hébergement).
   function isLocalDevHost(hostname) {
     return hostname === 'localhost'
       || hostname === '127.0.0.1'
@@ -167,7 +166,7 @@
   const IS_LOCAL_DEV = isLocalDevHost(location.hostname);
   const WS_SERVER = IS_LOCAL_DEV
     ? `ws://${location.hostname}:3001`
-    : 'wss://REMPLACER-PAR-URL-RENDER.onrender.com';
+    : 'wss://flash-a9yt.onrender.com';
   // file:// (double-clic sur index.html) donne un hostname vide -> ni local
   // ni configuré. On le détecte pour donner un message clair plutôt que de
   // laisser les 8 tentatives de reconnexion échouer en silence.
