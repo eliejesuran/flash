@@ -44,16 +44,17 @@
 
   .divider { opacity: .35; font-size: .8rem; }
 
-  #code-display { font-size: 2.6rem; font-weight: 700; letter-spacing: .12em; }
-  #qr-canvas { border-radius: 12px; background: #fff; padding: 8px; line-height: 0; }
+  #code-display, #share-code { font-size: 2.6rem; font-weight: 700; letter-spacing: .12em; }
+  #qr-canvas, #share-qr-canvas { border-radius: 12px; background: #fff; padding: 8px; line-height: 0; }
 
   .badge { padding: 6px 14px; border-radius: 999px; background: #1a1a24; font-size: .85rem; }
   .badge.on { background: #1f4d2f; color: #6fe08c; }
 
   .row { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
 
-  #meter { width: 240px; height: 10px; background: #1a1a24; border-radius: 6px; overflow: hidden; }
-  #meter-fill { height: 100%; width: 0%; background: #6c5ce7; }
+  /* Un mini-bar par bande (basses/médiums/aigus), couleurs = mapping RGB réel */
+  .meter { width: 70px; height: 10px; background: #1a1a24; border-radius: 6px; overflow: hidden; }
+  .meter-fill { height: 100%; width: 0%; }
 
   #track-name { font-size: .85rem; opacity: .7; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -62,10 +63,10 @@
     background: #161620; padding: 2px; cursor: pointer;
   }
 
-  /* ── Scanner QR in-app ── */
-  #scan-overlay { position: fixed; inset: 0; z-index: 20; background: #000; }
+  /* ── Overlays plein écran (scanner QR, partage session) ── */
+  .overlay { position: fixed; inset: 0; z-index: 20; background: #000; }
   #scan-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-  .scan-ui {
+  .overlay-ui {
     position: relative; z-index: 1; height: 100%;
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24px;
   }
@@ -120,7 +121,11 @@
       <button id="btn-play" disabled>▶ Lecture</button>
       <input type="color" id="color-picker" value="#ffffff" title="Couleur du flash écran">
     </div>
-    <div id="meter"><div id="meter-fill"></div></div>
+    <div class="row">
+      <div class="meter"><div id="meter-bass" class="meter-fill" style="background:#ff5c5c"></div></div>
+      <div class="meter"><div id="meter-mid" class="meter-fill" style="background:#5cff8a"></div></div>
+      <div class="meter"><div id="meter-treble" class="meter-fill" style="background:#5c8aff"></div></div>
+    </div>
 
     <button id="btn-leave-master" class="danger">Quitter la session</button>
   </div>
@@ -134,16 +139,29 @@
         <span class="badge"><span id="client-peers">0</span> connecté(s)</span>
         <span id="torch-badge" class="badge">…</span>
       </div>
-      <button id="btn-leave-client" class="danger">Quitter</button>
+      <div class="row">
+        <button id="btn-share-client" class="secondary">🔗 Inviter</button>
+        <button id="btn-leave-client" class="danger">Quitter</button>
+      </div>
     </div>
   </div>
 
   <!-- ─── Scanner QR ─── -->
-  <div id="scan-overlay" hidden>
+  <div id="scan-overlay" class="overlay" hidden>
     <video id="scan-video" playsinline muted autoplay></video>
-    <div class="scan-ui">
+    <div class="overlay-ui">
       <div class="scan-frame"></div>
       <button id="btn-scan-cancel" class="secondary">Annuler</button>
+    </div>
+  </div>
+
+  <!-- ─── Partager la session (accessible depuis l'écran client) ─── -->
+  <div id="share-overlay" class="overlay" hidden>
+    <div class="overlay-ui">
+      <div id="share-code">----</div>
+      <canvas id="share-qr-canvas"></canvas>
+      <p id="share-qr-hint" class="sub" hidden>QR indisponible (réseau/CDN) — utilise le code</p>
+      <button id="btn-share-close" class="secondary">Fermer</button>
     </div>
   </div>
 
@@ -243,7 +261,7 @@
 
       if (wsRole === 'client') {
         clientSetStatus('Connexion perdue — reconnexion...');
-        clientApplyCue(0); // ne reste pas figé sur la dernière couleur/torche
+        clientApplyCue(0, 0, 0); // ne reste pas figé sur la dernière couleur/torche
       } else if (wsRole === 'master') {
         masterSetStatus('Connexion perdue — reconnexion...');
       }
@@ -289,10 +307,10 @@
         setPeerCount(msg.peers);
         break;
       case 'cue':
-        if (wsRole === 'client') clientApplyCue(msg.intensity);
+        if (wsRole === 'client') clientApplyCue(msg.bass, msg.mid, msg.treble);
         break;
       case 'track_control':
-        if (wsRole === 'client' && msg.action === 'pause') clientApplyCue(0);
+        if (wsRole === 'client' && msg.action === 'pause') clientApplyCue(0, 0, 0);
         break;
       case 'color':
         if (wsRole === 'client') clientSetColor(msg.color);
@@ -371,7 +389,8 @@
   // ─── Maître ─────────────────────────────────────────────────────────────
 
   let audioCtx = null, analyser = null, audioEl = null, rafId = null;
-  let playing = false, lastCueSentAt = 0, smoothedIntensity = 0;
+  let playing = false, lastCueSentAt = 0;
+  let bandRanges = null; // {bass:[lo,hi], mid:[lo,hi], treble:[lo,hi]} en indices de bin
 
   function startMaster(code) {
     showScreen('master');
@@ -386,19 +405,26 @@
   });
 
   function renderQr(code) {
+    renderQrInto('#qr-canvas', '#qr-hint', code);
+  }
+
+  // Réutilisé par le QR permanent du maître et par le partage depuis l'écran
+  // client (n'importe qui déjà dans la session peut inviter, pas seulement
+  // la personne qui l'a créée).
+  function renderQrInto(canvasSel, hintSel, code) {
     // La lib QR vient d'un CDN — un blocage (ad-blocker, offline, wifi de salle)
     // ne doit jamais empêcher la connexion WS qui suit. Fallback : code texte seul.
-    $('#qr-canvas').hidden = false;
-    $('#qr-hint').hidden = true;
+    $(canvasSel).hidden = false;
+    $(hintSel).hidden = true;
     if (typeof QRCode === 'undefined') {
       console.warn('[qr] bibliothèque indisponible — code texte uniquement');
-      $('#qr-canvas').hidden = true;
-      $('#qr-hint').hidden = false;
+      $(canvasSel).hidden = true;
+      $(hintSel).hidden = false;
       return;
     }
     const url = `${location.origin}${location.pathname}?join=${code}`;
-    QRCode.toCanvas($('#qr-canvas'), url, { width: 220, margin: 1 }, (err) => {
-      if (err) { console.error('[qr]', err); $('#qr-canvas').hidden = true; $('#qr-hint').hidden = false; }
+    QRCode.toCanvas($(canvasSel), url, { width: 220, margin: 1 }, (err) => {
+      if (err) { console.error('[qr]', err); $(canvasSel).hidden = true; $(hintSel).hidden = false; }
     });
   }
 
@@ -418,10 +444,18 @@
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       const source = audioCtx.createMediaElementSource(audioEl);
       analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 256;
-      analyser.smoothingTimeConstant = 0.6;
+      analyser.fftSize = 2048; // résolution fine, nécessaire pour bien séparer basses/médiums/aigus
+      analyser.smoothingTimeConstant = 0.2; // peu de lissage natif : on veut des transitoires nets, l'enveloppe de beat s'occupe du reste
       source.connect(analyser);
       analyser.connect(audioCtx.destination);
+
+      const binHz = audioCtx.sampleRate / analyser.fftSize;
+      const toBin = (hz) => Math.round(hz / binHz);
+      bandRanges = {
+        bass:   [toBin(20),   toBin(250)],
+        mid:    [toBin(250),  toBin(4000)],
+        treble: [toBin(4000), toBin(12000)],
+      };
     }
 
     $('#btn-play').disabled = false;
@@ -450,24 +484,56 @@
     $('#btn-play').textContent = playing ? '⏸ Pause' : '▶ Lecture';
   }
 
+  // ─── Détection de "beat" par bande ───────────────────────────────────────
+  // Une simple moyenne de magnitude suit le volume mais "clignote" au gré du
+  // bruit du signal plutôt que de suivre le rythme. Ici : l'énergie instantanée
+  // est comparée à sa moyenne glissante récente — un pic net déclenche une
+  // attaque immédiate, puis l'enveloppe redescend en décroissance exponentielle
+  // jusqu'au prochain coup. Un vrai flash sur le beat plutôt qu'un flicker.
+  function createBandEnvelope() {
+    const history = [];
+    const HISTORY_SIZE = 43; // ~0.7s à 60fps
+    let envelope = 0;
+    return (energy) => {
+      history.push(energy);
+      if (history.length > HISTORY_SIZE) history.shift();
+      const avg = history.reduce((a, b) => a + b, 0) / history.length;
+      const isBeat = energy > avg * 1.25 && energy > 0.1;
+      envelope = isBeat ? Math.min(1, energy * 1.15) : envelope * 0.88;
+      return envelope;
+    };
+  }
+
+  const bassEnvelope = createBandEnvelope();
+  const midEnvelope = createBandEnvelope();
+  const trebleEnvelope = createBandEnvelope();
+
+  function bandEnergy(data, [lo, hi]) {
+    const from = Math.max(0, lo), to = Math.min(data.length - 1, hi);
+    if (to < from) return 0;
+    let sum = 0;
+    for (let i = from; i <= to; i++) sum += data[i];
+    return (sum / (to - from + 1)) / 255;
+  }
+
   function analysisLoop() {
     if (!playing) return;
     const data = new Uint8Array(analyser.frequencyBinCount);
     analyser.getByteFrequencyData(data);
 
-    // Bandes basses = premiers ~12% des bins (espacement linéaire de l'AnalyserNode)
-    const bassCount = Math.max(1, Math.floor(data.length * 0.12));
-    let sum = 0;
-    for (let i = 0; i < bassCount; i++) sum += data[i];
-    const raw = (sum / bassCount) / 255;
+    const bass = bassEnvelope(bandEnergy(data, bandRanges.bass));
+    const mid = midEnvelope(bandEnergy(data, bandRanges.mid));
+    const treble = trebleEnvelope(bandEnergy(data, bandRanges.treble));
 
-    smoothedIntensity += (raw - smoothedIntensity) * 0.35;
-    $('#meter-fill').style.width = `${Math.round(smoothedIntensity * 100)}%`;
+    $('#meter-bass').style.width = `${Math.round(bass * 100)}%`;
+    $('#meter-mid').style.width = `${Math.round(mid * 100)}%`;
+    $('#meter-treble').style.width = `${Math.round(treble * 100)}%`;
 
     const now = performance.now();
     if (now - lastCueSentAt >= 33) { // ~30Hz max
       lastCueSentAt = now;
-      wsSend({ type: 'cue', intensity: Math.round(smoothedIntensity * 1000) / 1000 });
+      const r3 = (v) => Math.round(v * 1000) / 1000;
+      wsSend({ type: 'cue', bass: r3(bass), mid: r3(mid), treble: r3(treble) });
     }
 
     rafId = requestAnimationFrame(analysisLoop);
@@ -484,13 +550,15 @@
   // ─── Client ─────────────────────────────────────────────────────────────
 
   let torchTrack = null, torchSupported = false, torchTimer = null, torchLoopActive = false;
-  let latestIntensity = 0;
-  let currentColor = { r: 255, g: 255, b: 255 }; // blanc par défaut = comportement d'origine
+  let latestIntensity = 0; // max(bass,mid,treble) — pilote la torche, forcément en niveaux de gris
+  let latestBass = 0, latestMid = 0, latestTreble = 0;
+  let currentColor = { r: 255, g: 255, b: 255 }; // blanc par défaut = teinte neutre, laisse passer les 3 bandes
 
   function startClient(code) {
     showScreen('client');
     clientSetStatus('Connexion...');
     currentColor = { r: 255, g: 255, b: 255 };
+    latestBass = latestMid = latestTreble = 0;
     wsConnect(code, 'client');
     setupTorch();
     requestWakeLock();
@@ -508,13 +576,24 @@
     const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
     if (!m) return;
     currentColor = { r: parseInt(m[1], 16), g: parseInt(m[2], 16), b: parseInt(m[3], 16) };
-    clientApplyCue(latestIntensity); // ré-applique tout de suite avec la nouvelle teinte
+    clientApplyCue(latestBass, latestMid, latestTreble); // ré-applique tout de suite avec la nouvelle teinte
   }
 
-  function clientApplyCue(intensity) {
-    const v = Math.max(0, Math.min(1, intensity));
-    latestIntensity = v;
-    const r = (currentColor.r * v) | 0, g = (currentColor.g * v) | 0, b = (currentColor.b * v) | 0;
+  // La couleur choisie par le maître est une teinte/palette, pas une valeur figée :
+  // chaque canal RGB suit l'énergie de sa propre bande de fréquence, donc la
+  // couleur affichée évolue réellement avec la musique (basses -> rouge, médiums
+  // -> vert, aigus -> bleu, pondérés par la teinte). En blanc (défaut), c'est une
+  // vraie visualisation spectrale. La torche reste en niveaux de gris (intensité
+  // = max des 3 bandes) car une torche physique ne peut pas être teintée.
+  function clientApplyCue(bass, mid, treble) {
+    latestBass = Math.max(0, Math.min(1, bass));
+    latestMid = Math.max(0, Math.min(1, mid));
+    latestTreble = Math.max(0, Math.min(1, treble));
+    latestIntensity = Math.max(latestBass, latestMid, latestTreble);
+
+    const r = (currentColor.r * latestBass) | 0;
+    const g = (currentColor.g * latestMid) | 0;
+    const b = (currentColor.b * latestTreble) | 0;
     $('#flash-zone').style.backgroundColor = `rgb(${r},${g},${b})`;
     if (torchSupported && !torchLoopActive) torchLoop();
   }
@@ -588,6 +667,15 @@
     releaseWakeLock();
     showScreen('home');
   });
+
+  $('#btn-share-client').addEventListener('click', () => {
+    if (!wsSessionId) return;
+    $('#share-code').textContent = wsSessionId;
+    renderQrInto('#share-qr-canvas', '#share-qr-hint', wsSessionId);
+    $('#share-overlay').hidden = false;
+  });
+
+  $('#btn-share-close').addEventListener('click', () => { $('#share-overlay').hidden = true; });
 
   // ─── Scanner QR in-app ──────────────────────────────────────────────────
   // BarcodeDetector uniquement (Chrome/Edge/Android + Safari 17+) : pas de

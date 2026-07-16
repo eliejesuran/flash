@@ -211,10 +211,9 @@ wss.on('connection', (ws, req) => {
         if (now - session.lastCueAt < CUE_MIN_INTERVAL_MS) return;
         session.lastCueAt = now;
 
-        const intensity = typeof msg.intensity === 'number'
-          ? Math.max(0, Math.min(1, msg.intensity))
-          : 0;
-        broadcast(session, { type: 'cue', intensity, ts: now }, ws);
+        const clamp01 = (v) => typeof v === 'number' ? Math.max(0, Math.min(1, v)) : 0;
+        const bass = clamp01(msg.bass), mid = clamp01(msg.mid), treble = clamp01(msg.treble);
+        broadcast(session, { type: 'cue', bass, mid, treble, ts: now }, ws);
         break;
       }
 
