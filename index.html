@@ -121,15 +121,10 @@
 
   .row { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; align-items: center; }
 
-  /* Un mini-bar par bande (basses/médiums/aigus), couleurs = mapping RGB réel */
-  .meter { width: 68px; height: 9px; background: var(--card-2); border-radius: 6px; overflow: hidden; }
+  /* Un mini-bar par bande (basses/médiums/aigus), couleurs = mapping RGB réel.
+     60px pour tenir sur une ligne avec le sélecteur de couleur dans la carte de 320px. */
+  .meter { width: 60px; height: 9px; background: var(--card-2); border-radius: 6px; overflow: hidden; }
   .meter-fill { height: 100%; width: 0%; transition: width 60ms linear; }
-
-  #track-name { font-size: .85rem; color: var(--text-dim); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-  input[type=file] {
-    font-size: .85rem; color: var(--text-dim); max-width: 260px;
-  }
 
   input[type=color] {
     width: 52px; height: 44px; border-radius: 12px; border: 2px solid var(--border);
@@ -192,17 +187,14 @@
     </div>
 
     <div class="card">
-      <input type="file" id="audio-file" accept="audio/*,.mp3,.m4a,.wav,.aac,.ogg">
-      <div id="track-name"></div>
+      <button id="btn-listen" class="primary">🎤 Écouter la musique</button>
       <div class="row">
-        <button id="btn-play" class="primary" disabled>▶ Lecture</button>
         <input type="color" id="color-picker" value="#ffffff" title="Couleur du flash écran">
-      </div>
-      <div class="row">
         <div class="meter"><div id="meter-bass" class="meter-fill" style="background:#ff5c5c"></div></div>
         <div class="meter"><div id="meter-mid" class="meter-fill" style="background:#5cff8a"></div></div>
         <div class="meter"><div id="meter-treble" class="meter-fill" style="background:#5c8aff"></div></div>
       </div>
+      <p class="sub">Lance ta musique où tu veux (enceinte, Spotify…) : le téléphone l'écoute au micro. Signal parfait : un câble aux de la source vers l'entrée micro.</p>
     </div>
 
     <button id="btn-leave-master" class="danger">Quitter la session</button>
@@ -481,10 +473,10 @@
 
   // ─── Maître ─────────────────────────────────────────────────────────────
 
-  let audioCtx = null, analyser = null, audioEl = null, analysisTimer = null;
-  let playing = false;
+  let audioCtx = null, analyser = null, analysisTimer = null;
+  let listening = false;
+  let micStream = null, micSource = null;
   let bandRanges = null; // {bass:[lo,hi], mid:[lo,hi], treble:[lo,hi]} en indices de bin
-  let currentBlobUrl = null, onAudioError = null, onAudioCanplay = null;
 
   function startMaster(code) {
     showScreen('master');
@@ -516,66 +508,45 @@
     img.src = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(url)}&size=240x240&margin=2`;
   }
 
-  $('#audio-file').addEventListener('change', (e) => {
-    const file = e.target.files[0];
-    if (file) setupAudio(file);
+  // Micro ambiant plutôt que fichier : le maître écoute ce qui joue autour de
+  // lui (enceinte, Spotify sur le même téléphone, platine — peu importe la
+  // source) et diffuse l'analyse en direct. La chaîne d'analyse est identique
+  // à l'ancienne version fichier, seule la source change (MediaStreamSource
+  // au lieu de MediaElementSource).
+  $('#btn-listen').addEventListener('click', () => {
+    if (listening) stopListening();
+    else startListening();
   });
 
-  // État piloté par les événements natifs 'play'/'pause' de l'élément audio,
-  // pas par le bouton : un bouton-seul désynchronise `playing` de la réalité
-  // dès que quelque chose met en pause en dehors du clic (fin de piste, ou
-  // sur mobile une interruption OS — appel, autre appli audio, etc.). Les
-  // événements natifs se déclenchent dans tous les cas, donc `playing` reste
-  // toujours correct, et cues/torche/couleur ne restent jamais figés en
-  // silence côté clients.
-  function setupAudio(file) {
-    if (!audioEl) {
-      audioEl = new Audio();
-      audioEl.loop = true; // une piste qui finit ne doit pas juste éteindre le show
-      audioEl.addEventListener('play', () => {
-        playing = true;
-        updatePlayButton();
-        wsSend({ type: 'track_control', action: 'play' });
-        clearInterval(analysisTimer);
-        analysisTimer = setInterval(analysisTick, 33); // ~30Hz, immunisé au throttling de requestAnimationFrame en arrière-plan
-      });
-      audioEl.addEventListener('pause', () => {
-        playing = false;
-        updatePlayButton();
-        wsSend({ type: 'track_control', action: 'pause' });
-        clearInterval(analysisTimer);
-      });
+  async function startListening() {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      alert('Micro non disponible sur ce navigateur.');
+      return;
     }
 
-    // Annule les listeners "once" d'un chargement précédent pas encore résolu
-    // (ex. fichier changé juste après le précédent, ou quitté entre-temps).
-    if (onAudioError) audioEl.removeEventListener('error', onAudioError);
-    if (onAudioCanplay) audioEl.removeEventListener('canplay', onAudioCanplay);
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        // Les 3 traitements "voix" sont actifs par défaut et pensés pour les
+        // appels : l'AGC écrase les attaques, la suppression de bruit mange du
+        // contenu musical légitime, l'anti-écho déphase — tous détruisent la
+        // dynamique dont la détection de beat a besoin. Explicitement off.
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      });
+    } catch (err) {
+      console.error('[micro] accès refusé ou indisponible', err);
+      alert('Accès micro refusé — autorise le micro pour ce site puis réessaie.');
+      return;
+    }
 
-    if (currentBlobUrl) URL.revokeObjectURL(currentBlobUrl); // libère le fichier précédent
-    currentBlobUrl = URL.createObjectURL(file);
-    audioEl.src = currentBlobUrl;
-
-    $('#btn-play').disabled = true; // réactivé seulement quand le fichier est confirmé lisible
-    $('#track-name').textContent = file.name;
-
-    onAudioError = () => {
-      console.error('[audio] échec de chargement', audioEl.error);
-      alert(`Impossible de charger "${file.name}" — format audio non supporté par ce navigateur.`);
-      $('#track-name').textContent = '';
-    };
-    onAudioCanplay = () => { $('#btn-play').disabled = false; };
-    audioEl.addEventListener('error', onAudioError, { once: true });
-    audioEl.addEventListener('canplay', onAudioCanplay, { once: true });
-
+    // Contexte créé APRÈS l'obtention du flux : sur iOS Safari, un AudioContext
+    // créé avant getUserMedia peut rester sur un sampleRate différent de celui
+    // du micro (44.1k vs 48k) et sortir un signal muet/distordu.
     if (!audioCtx) {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      const source = audioCtx.createMediaElementSource(audioEl);
       analyser = audioCtx.createAnalyser();
       analyser.fftSize = 2048; // résolution fine, nécessaire pour bien séparer basses/médiums/aigus
       analyser.smoothingTimeConstant = 0.2; // peu de lissage natif : on veut des transitoires nets, l'enveloppe de beat s'occupe du reste
-      source.connect(analyser);
-      analyser.connect(audioCtx.destination);
 
       const binHz = audioCtx.sampleRate / analyser.fftSize;
       const toBin = (hz) => Math.round(hz / binHz);
@@ -585,39 +556,52 @@
         treble: [toBin(4000), toBin(12000)],
       };
     }
+
+    micStream = stream;
+    micSource = audioCtx.createMediaStreamSource(stream);
+    micSource.connect(analyser);
+    // SURTOUT ne pas connecter l'analyser au destination : micro -> haut-parleur
+    // du même appareil = boucle de larsen immédiate. L'analyse n'a pas besoin
+    // d'être audible, la musique joue déjà ailleurs.
+
+    // Équivalent des events natifs play/pause de l'ancien <audio> : si le micro
+    // est coupé en dehors du bouton (permission retirée en cours de route,
+    // interruption OS, périphérique débranché), 'ended' est le seul signal —
+    // sans ça, cues/torche/couleur gèleraient en silence côté clients.
+    stream.getAudioTracks()[0].addEventListener('ended', stopListening);
+
+    if (audioCtx.state === 'suspended') await audioCtx.resume().catch(() => {});
+    if (audioCtx.state === 'suspended') {
+      // iOS : la demande de permission micro peut consommer le geste utilisateur
+      // du clic, et un contexte suspendu ne traite RIEN (analyser muet). On se
+      // ré-arme sur le prochain toucher, n'importe où sur la page.
+      const resumeOnTap = () => { audioCtx.resume().catch(() => {}); };
+      document.addEventListener('touchend', resumeOnTap, { once: true });
+      document.addEventListener('click', resumeOnTap, { once: true });
+    }
+
+    listening = true;
+    updateListenButton();
+    wsSend({ type: 'track_control', action: 'play' });
+    clearInterval(analysisTimer);
+    analysisTimer = setInterval(analysisTick, 33); // ~30Hz, immunisé au throttling de requestAnimationFrame en arrière-plan
   }
 
-  function resetMasterAudio() {
-    if (audioEl) {
-      if (onAudioError) { audioEl.removeEventListener('error', onAudioError); onAudioError = null; }
-      if (onAudioCanplay) { audioEl.removeEventListener('canplay', onAudioCanplay); onAudioCanplay = null; }
-      audioEl.pause(); // déclenche le listener 'pause' -> playing=false, timer coupé
-      audioEl.removeAttribute('src');
-      audioEl.load();
-    }
-    if (currentBlobUrl) { URL.revokeObjectURL(currentBlobUrl); currentBlobUrl = null; }
-    $('#btn-play').disabled = true;
-    $('#track-name').textContent = '';
-    $('#audio-file').value = '';
+  function stopListening() {
+    if (!listening && !micStream) return;
+    listening = false;
+    clearInterval(analysisTimer);
+    if (micSource) { micSource.disconnect(); micSource = null; }
+    if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null; }
+    updateListenButton();
+    wsSend({ type: 'track_control', action: 'pause' }); // les clients repassent par leur reset (écran noir)
     $('#meter-bass').style.width = '0%';
     $('#meter-mid').style.width = '0%';
     $('#meter-treble').style.width = '0%';
   }
 
-  $('#btn-play').addEventListener('click', async () => {
-    if (!audioEl) return;
-    if (audioCtx.state === 'suspended') await audioCtx.resume();
-    try {
-      if (playing) audioEl.pause();
-      else await audioEl.play();
-    } catch (err) {
-      console.error('[audio] lecture impossible', err);
-      alert('Lecture impossible — format non supporté par ce navigateur ?');
-    }
-  });
-
-  function updatePlayButton() {
-    $('#btn-play').textContent = playing ? '⏸ Pause' : '▶ Lecture';
+  function updateListenButton() {
+    $('#btn-listen').textContent = listening ? '⏹ Arrêter l’écoute' : '🎤 Écouter la musique';
   }
 
   // ─── Détection de "beat" par bande ───────────────────────────────────────
@@ -679,7 +663,7 @@
   // d'onglet/fenêtre est courant. setInterval continue de tourner (throttle
   // beaucoup plus mollement en arrière-plan) donc les cue continuent de partir.
   function analysisTick() {
-    if (!playing) return;
+    if (!listening) return;
     const data = new Uint8Array(analyser.frequencyBinCount);
     analyser.getByteFrequencyData(data);
     const now = performance.now();
@@ -697,9 +681,9 @@
   }
 
   $('#btn-leave-master').addEventListener('click', () => {
+    stopListening(); // AVANT wsDisconnect : le 'pause' doit partir tant que le socket est ouvert, sinon les clients restent figés sur la dernière couleur
     wsDisconnect();
     releaseWakeLock();
-    resetMasterAudio();
     showScreen('home');
   });
 
