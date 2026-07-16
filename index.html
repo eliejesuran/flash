@@ -5,62 +5,131 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="theme-color" content="#0a0a0f">
+<meta name="theme-color" content="#0a0a12" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f4f4fa" media="(prefers-color-scheme: light)">
 <title>Flash</title>
 <style>
-  :root { color-scheme: dark; }
+  :root {
+    color-scheme: dark;
+    --bg: #0a0a12;
+    --bg-grad: radial-gradient(circle at 50% -10%, #1c1030 0%, #0a0a12 55%);
+    --card: #15151f;
+    --card-2: #1c1c2a;
+    --text: #f4f4fa;
+    --text-dim: rgba(244,244,250,.62);
+    --border: rgba(255,255,255,.08);
+    --accent: #7c5cff;
+    --accent-2: #ff5c9d;
+    --accent-grad: linear-gradient(135deg, var(--accent), var(--accent-2));
+    --danger-bg: #2a1618;
+    --danger-text: #ff8a8a;
+    --success-bg: #123420;
+    --success-text: #6fe08c;
+    --shadow: 0 8px 30px rgba(0,0,0,.35);
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      color-scheme: light;
+      --bg: #f4f4fa;
+      --bg-grad: radial-gradient(circle at 50% -10%, #ece4ff 0%, #f4f4fa 55%);
+      --card: #ffffff;
+      --card-2: #ececf5;
+      --text: #16161f;
+      --text-dim: rgba(22,22,31,.6);
+      --border: rgba(0,0,0,.08);
+      --accent: #6c4fe0;
+      --accent-2: #e0498a;
+      --danger-bg: #ffe7e5;
+      --danger-text: #c0392b;
+      --success-bg: #e3f9ea;
+      --success-text: #1f8a4c;
+      --shadow: 0 8px 30px rgba(30,20,60,.10);
+    }
+  }
+
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; overscroll-behavior: none; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    background: #0a0a0f; color: #eee;
+    background: var(--bg-grad);
+    color: var(--text);
     display: flex; flex-direction: column;
+    transition: background .3s ease, color .3s ease;
   }
   [hidden] { display: none !important; }
 
   .screen {
     flex: 1; min-height: 100dvh;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    padding: 24px; gap: 18px; text-align: center;
+    padding: 28px 22px; gap: 16px; text-align: center;
   }
-  h1 { font-size: 2.4rem; letter-spacing: .02em; }
-  .sub { opacity: .6; font-size: .95rem; max-width: 320px; }
+
+  h1 { font-size: 2.6rem; letter-spacing: -.01em; font-weight: 800; }
+  h1 .bolt { filter: drop-shadow(0 0 14px rgba(124,92,255,.65)); }
+  .sub { color: var(--text-dim); font-size: .95rem; max-width: 300px; line-height: 1.5; margin-bottom: 4px; }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 22px;
+    box-shadow: var(--shadow);
+    display: flex; flex-direction: column; align-items: center; gap: 14px;
+    width: 100%; max-width: 320px;
+  }
 
   button {
-    font: inherit; padding: 14px 28px; border-radius: 12px; border: none;
-    background: #6c5ce7; color: #fff; font-weight: 600; cursor: pointer; min-width: 220px;
+    font: inherit; padding: 14px 26px; border-radius: 14px; border: none;
+    color: #fff; font-weight: 600; cursor: pointer; min-width: 220px;
+    transition: transform .12s ease, filter .15s ease, opacity .15s ease;
   }
-  button:active { transform: scale(.97); }
+  button:active { transform: scale(.96); }
   button:disabled { opacity: .35; cursor: not-allowed; }
-  button.secondary { background: #23232f; }
-  button.danger { background: #3a1f1f; color: #ff8a8a; }
+  button:not(:disabled):hover { filter: brightness(1.08); }
+
+  button.primary { background: var(--accent-grad); box-shadow: 0 6px 20px rgba(124,92,255,.35); }
+  button.secondary { background: var(--card-2); color: var(--text); border: 1px solid var(--border); }
+  button.danger { background: var(--danger-bg); color: var(--danger-text); }
 
   input[type=text] {
-    font: inherit; padding: 14px; border-radius: 12px; border: 2px solid #2c2c38;
-    background: #161620; color: #fff; text-align: center;
-    text-transform: uppercase; letter-spacing: .2em; width: 220px;
+    font: inherit; padding: 14px; border-radius: 14px; border: 2px solid var(--border);
+    background: var(--card-2); color: var(--text); text-align: center;
+    text-transform: uppercase; letter-spacing: .22em; width: 100%; max-width: 220px;
   }
-  input[type=text]:focus { outline: none; border-color: #6c5ce7; }
+  input[type=text]:focus { outline: none; border-color: var(--accent); }
 
-  .divider { opacity: .35; font-size: .8rem; }
+  .divider { color: var(--text-dim); font-size: .78rem; text-transform: uppercase; letter-spacing: .08em; }
 
-  #code-display, #share-code { font-size: 2.6rem; font-weight: 700; letter-spacing: .12em; }
-  #qr-canvas, #share-qr-canvas { border-radius: 12px; background: #fff; padding: 8px; line-height: 0; }
+  #code-display, #share-code {
+    font-size: 2.5rem; font-weight: 800; letter-spacing: .14em;
+    background: var(--accent-grad); -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  #qr-img, #share-qr-img {
+    border-radius: 14px; background: #fff; padding: 10px; width: 200px; height: 200px; display: block;
+    box-shadow: var(--shadow);
+  }
 
-  .badge { padding: 6px 14px; border-radius: 999px; background: #1a1a24; font-size: .85rem; }
-  .badge.on { background: #1f4d2f; color: #6fe08c; }
+  .badge {
+    padding: 7px 14px; border-radius: 999px; background: var(--card-2);
+    color: var(--text); font-size: .82rem; border: 1px solid var(--border);
+  }
+  .badge.on { background: var(--success-bg); color: var(--success-text); border-color: transparent; }
 
-  .row { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; align-items: center; }
 
   /* Un mini-bar par bande (basses/médiums/aigus), couleurs = mapping RGB réel */
-  .meter { width: 70px; height: 10px; background: #1a1a24; border-radius: 6px; overflow: hidden; }
-  .meter-fill { height: 100%; width: 0%; }
+  .meter { width: 68px; height: 9px; background: var(--card-2); border-radius: 6px; overflow: hidden; }
+  .meter-fill { height: 100%; width: 0%; transition: width 60ms linear; }
 
-  #track-name { font-size: .85rem; opacity: .7; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #track-name { font-size: .85rem; color: var(--text-dim); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  input[type=file] {
+    font-size: .85rem; color: var(--text-dim); max-width: 260px;
+  }
 
   input[type=color] {
-    width: 56px; height: 40px; border-radius: 10px; border: 2px solid #2c2c38;
-    background: #161620; padding: 2px; cursor: pointer;
+    width: 52px; height: 44px; border-radius: 12px; border: 2px solid var(--border);
+    background: var(--card-2); padding: 3px; cursor: pointer;
   }
 
   /* ── Overlays plein écran (scanner QR, partage session) ── */
@@ -70,7 +139,7 @@
     position: relative; z-index: 1; height: 100%;
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24px;
   }
-  .scan-frame { width: 220px; height: 220px; border: 3px solid #6c5ce7; border-radius: 16px; box-shadow: 0 0 0 2000px rgba(0,0,0,.5); }
+  .scan-frame { width: 220px; height: 220px; border: 3px solid var(--accent); border-radius: 16px; box-shadow: 0 0 0 2000px rgba(0,0,0,.55); }
 
   /* ── Écran client : zone plein écran réactive au flash ── */
   #screen-client { position: relative; padding: 0; overflow: hidden; }
@@ -84,47 +153,52 @@
     height: 100%; width: 100%; padding: 24px; gap: 16px;
   }
   .client-ui .row { padding-top: 8px; }
+  .client-ui .badge { background: rgba(20,20,28,.72); color: #f4f4fa; border-color: rgba(255,255,255,.12); backdrop-filter: blur(6px); }
+  .client-ui .badge.on { background: rgba(18,52,32,.82); color: #6fe08c; }
 </style>
 </head>
 <body>
 
   <!-- ─── Accueil ─── -->
   <div class="screen" id="screen-home">
-    <h1>⚡ Flash</h1>
+    <h1><span class="bolt">⚡</span> Flash</h1>
     <p class="sub">Light show synchronisé — un maître joue la musique, les téléphones autour flashent en rythme.</p>
 
-    <button id="btn-create">🎵 Créer une session</button>
-
-    <span class="divider">— ou —</span>
-
-    <input type="text" id="input-code" placeholder="CODE" maxlength="6" autocomplete="off" autocapitalize="characters">
-    <div class="row">
-      <button id="btn-join" class="secondary">Rejoindre</button>
-      <button id="btn-scan" class="secondary">📷 Scanner</button>
+    <div class="card">
+      <button id="btn-create" class="primary">🎵 Créer une session</button>
+      <span class="divider">— ou —</span>
+      <input type="text" id="input-code" placeholder="CODE" maxlength="6" autocomplete="off" autocapitalize="characters">
+      <div class="row">
+        <button id="btn-join" class="secondary">Rejoindre</button>
+        <button id="btn-scan" class="secondary">📷 Scanner</button>
+      </div>
     </div>
   </div>
 
   <!-- ─── Maître ─── -->
   <div class="screen" id="screen-master" hidden>
-    <div id="code-display">----</div>
-    <canvas id="qr-canvas"></canvas>
-    <p id="qr-hint" class="sub" hidden>QR indisponible (réseau/CDN) — utilise le code</p>
-    <div class="row">
-      <span class="badge"><span id="master-peers">0</span> connecté(s)</span>
-      <span id="master-status" class="badge">Connexion...</span>
+    <div class="card">
+      <div id="code-display">----</div>
+      <img id="qr-img" alt="QR de la session" hidden>
+      <p id="qr-hint" class="sub" hidden>QR indisponible (réseau) — utilise le code</p>
+      <div class="row">
+        <span class="badge"><span id="master-peers">0</span> connecté(s)</span>
+        <span id="master-status" class="badge">Connexion...</span>
+      </div>
     </div>
 
-    <input type="file" id="audio-file" accept="audio/*,.mp3,.m4a,.wav,.aac,.ogg">
-    <div id="track-name"></div>
-
-    <div class="row">
-      <button id="btn-play" disabled>▶ Lecture</button>
-      <input type="color" id="color-picker" value="#ffffff" title="Couleur du flash écran">
-    </div>
-    <div class="row">
-      <div class="meter"><div id="meter-bass" class="meter-fill" style="background:#ff5c5c"></div></div>
-      <div class="meter"><div id="meter-mid" class="meter-fill" style="background:#5cff8a"></div></div>
-      <div class="meter"><div id="meter-treble" class="meter-fill" style="background:#5c8aff"></div></div>
+    <div class="card">
+      <input type="file" id="audio-file" accept="audio/*,.mp3,.m4a,.wav,.aac,.ogg">
+      <div id="track-name"></div>
+      <div class="row">
+        <button id="btn-play" class="primary" disabled>▶ Lecture</button>
+        <input type="color" id="color-picker" value="#ffffff" title="Couleur du flash écran">
+      </div>
+      <div class="row">
+        <div class="meter"><div id="meter-bass" class="meter-fill" style="background:#ff5c5c"></div></div>
+        <div class="meter"><div id="meter-mid" class="meter-fill" style="background:#5cff8a"></div></div>
+        <div class="meter"><div id="meter-treble" class="meter-fill" style="background:#5c8aff"></div></div>
+      </div>
     </div>
 
     <button id="btn-leave-master" class="danger">Quitter la session</button>
@@ -159,23 +233,13 @@
   <div id="share-overlay" class="overlay" hidden>
     <div class="overlay-ui">
       <div id="share-code">----</div>
-      <canvas id="share-qr-canvas"></canvas>
-      <p id="share-qr-hint" class="sub" hidden>QR indisponible (réseau/CDN) — utilise le code</p>
+      <img id="share-qr-img" alt="QR de la session" hidden>
+      <p id="share-qr-hint" class="sub" hidden>QR indisponible (réseau) — utilise le code</p>
       <button id="btn-share-close" class="secondary">Fermer</button>
     </div>
   </div>
 
-<script type="module">
-  // /lib/browser.min.js (utilisé avant) charge sans erreur réseau mais contient
-  // require("./core/qrcode") — CommonJS, inexistant en navigateur, donc plante
-  // silencieusement à l'exécution : QRCode ne se définit jamais, malgré un 200 OK.
-  // Vérifié en import Node réel (pas juste un curl) : le bundle ESM +esm de
-  // jsdelivr (résolution des dépendances internes incluse) exécute et produit
-  // une vraie matrice QR. C'est un module ES, pas un script classique — d'où le
-  // besoin de ce petit script dédié pour l'exposer en global.
-  import QRCode from 'https://cdn.jsdelivr.net/npm/qrcode@1.5.3/+esm';
-  window.QRCode = QRCode;
-</script>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
 <script>
 (() => {
   'use strict';
@@ -416,27 +480,21 @@
   });
 
   function renderQr(code) {
-    renderQrInto('#qr-canvas', '#qr-hint', code);
+    renderQrInto('#qr-img', '#qr-hint', code);
   }
 
   // Réutilisé par le QR permanent du maître et par le partage depuis l'écran
   // client (n'importe qui déjà dans la session peut inviter, pas seulement
-  // la personne qui l'a créée).
-  function renderQrInto(canvasSel, hintSel, code) {
-    // La lib QR vient d'un CDN — un blocage (ad-blocker, offline, wifi de salle)
-    // ne doit jamais empêcher la connexion WS qui suit. Fallback : code texte seul.
-    $(canvasSel).hidden = false;
-    $(hintSel).hidden = true;
-    if (!('QRCode' in window)) {
-      console.warn('[qr] bibliothèque indisponible — code texte uniquement');
-      $(canvasSel).hidden = true;
-      $(hintSel).hidden = false;
-      return;
-    }
+  // la personne qui l'a créée). Généré via une API externe (image directe,
+  // pas de lib JS côté client) — même technique que ../mix, plus robuste que
+  // le rendu client-side (deux bugs CDN successifs avant d'en arriver là).
+  function renderQrInto(imgSel, hintSel, code) {
+    const img = $(imgSel), hint = $(hintSel);
     const url = `${location.origin}${location.pathname}?join=${code}`;
-    QRCode.toCanvas($(canvasSel), url, { width: 220, margin: 1 }, (err) => {
-      if (err) { console.error('[qr]', err); $(canvasSel).hidden = true; $(hintSel).hidden = false; }
-    });
+    img.hidden = false;
+    hint.hidden = true;
+    img.onerror = () => { img.hidden = true; hint.hidden = false; };
+    img.src = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(url)}&size=240x240&margin=2`;
   }
 
   $('#audio-file').addEventListener('change', (e) => {
@@ -549,12 +607,6 @@
   // est comparée à sa moyenne glissante récente — un pic net déclenche une
   // attaque immédiate, puis l'enveloppe redescend en décroissance exponentielle
   // jusqu'au prochain coup. Un vrai flash sur le beat plutôt qu'un flicker.
-  //
-  // v1 déclenchait trop souvent : un signal soutenu et fort (ex. basse continue)
-  // dépasse facilement moyenne×1.25 à répétition, frame après frame, ce qui
-  // donnait un flicker rapide plutôt que des coups nets. Fix : seuil relevé
-  // (×1.5) + période réfractaire (~120ms) qui empêche un nouveau déclenchement
-  // tant que le coup précédent n'a pas eu le temps de redescendre.
   const MIN_BEAT_INTERVAL_MS = 120;
 
   function createBandEnvelope() {
@@ -627,7 +679,7 @@
   // ─── Client ─────────────────────────────────────────────────────────────
 
   let torchTrack = null, torchSupported = false, torchTimer = null, torchLoopActive = false;
-  let latestIntensity = 0; // max(bass,mid,treble) — pilote la torche, forcément en niveaux de gris
+  let latestIntensity = 0; // treble — pilote la torche, forcément en niveaux de gris
   let latestBass = 0, latestMid = 0, latestTreble = 0;
   let currentColor = { r: 255, g: 255, b: 255 }; // blanc par défaut = teinte neutre, laisse passer les 3 bandes
 
@@ -750,61 +802,64 @@
   $('#btn-share-client').addEventListener('click', () => {
     if (!wsSessionId) return;
     $('#share-code').textContent = wsSessionId;
-    renderQrInto('#share-qr-canvas', '#share-qr-hint', wsSessionId);
+    renderQrInto('#share-qr-img', '#share-qr-hint', wsSessionId);
     $('#share-overlay').hidden = false;
   });
 
   $('#btn-share-close').addEventListener('click', () => { $('#share-overlay').hidden = true; });
 
   // ─── Scanner QR in-app ──────────────────────────────────────────────────
-  // BarcodeDetector uniquement (Chrome/Edge/Android) : pas de lib CDN pour
-  // ça, on a déjà eu deux bugs CDN sur l'encodeur QR (voir renderQrInto) —
-  // inutile de dupliquer ce risque. AUCUNE version de Safari/iOS ne
-  // l'implémente (vérifié caniuse — "disabled by default" partout sur iOS,
-  // même chose sous WebKit). Bouton toujours visible (pas caché en silence,
-  // ça prête à confusion) : message clair au clic si indisponible plutôt
-  // que le bouton qui disparaît sans explication.
+  // jsQR (canvas + décodage pixel pur JS) plutôt que BarcodeDetector : ce
+  // dernier n'existe sur AUCUNE version de Safari/iOS (vérifié caniuse —
+  // "disabled by default" partout sur iOS). jsQR n'a aucune dépendance à une
+  // API native, juste caméra+canvas — fonctionne partout, y compris iOS.
+  // Même lib/technique que ../mix, déjà validée en usage réel.
 
-  const scanSupported = 'BarcodeDetector' in window;
+  let scanStream = null, scanRAF = null;
 
-  let scanStream = null, scanTimer = null;
-
-  $('#btn-scan').addEventListener('click', () => {
-    if (!scanSupported) {
-      alert('Scanner indisponible sur ce navigateur (iOS/Safari ne le supporte pas). Utilise le code, ou scanne le QR avec l\'appareil photo natif.');
-      return;
-    }
-    startScan();
-  });
+  $('#btn-scan').addEventListener('click', startScan);
   $('#btn-scan-cancel').addEventListener('click', stopScan);
 
   async function startScan() {
-    let detector;
-    try {
-      detector = new BarcodeDetector({ formats: ['qr_code'] });
-    } catch {
-      alert('Scanner QR indisponible sur ce navigateur.');
+    if (typeof jsQR === 'undefined') {
+      alert('Scanner indisponible (bibliothèque non chargée — vérifie ta connexion).');
       return;
     }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      alert('Caméra non disponible sur cet appareil/navigateur.');
+      return;
+    }
+    $('#scan-overlay').hidden = false;
     try {
       scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
     } catch {
+      stopScan();
       alert('Accès caméra refusé ou indisponible.');
       return;
     }
-    $('#scan-video').srcObject = scanStream;
-    $('#scan-overlay').hidden = false;
-    scanLoop(detector);
-  }
+    const video = $('#scan-video');
+    video.srcObject = scanStream;
+    await video.play().catch(() => {});
 
-  async function scanLoop(detector) {
-    if (!scanStream) return;
-    try {
-      const codes = await detector.detect($('#scan-video'));
-      const code = codes.length ? extractCode(codes[0].rawValue) : null;
-      if (code) { stopScan(); startClient(code); return; }
-    } catch { /* frame pas encore prête — on retente */ }
-    scanTimer = setTimeout(() => scanLoop(detector), 250);
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+    const tick = () => {
+      if (!scanStream) return; // scan annulé
+      if (video.readyState === video.HAVE_ENOUGH_DATA && video.videoWidth) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const result = jsQR(frame.data, frame.width, frame.height, { inversionAttempts: 'dontInvert' });
+        if (result?.data) {
+          const code = extractCode(result.data);
+          if (code) { stopScan(); startClient(code); return; }
+        }
+      }
+      scanRAF = requestAnimationFrame(tick);
+    };
+    scanRAF = requestAnimationFrame(tick);
   }
 
   function extractCode(raw) {
@@ -816,8 +871,9 @@
   }
 
   function stopScan() {
-    clearTimeout(scanTimer);
+    if (scanRAF) { cancelAnimationFrame(scanRAF); scanRAF = null; }
     if (scanStream) { scanStream.getTracks().forEach((t) => t.stop()); scanStream = null; }
+    $('#scan-video').srcObject = null;
     $('#scan-overlay').hidden = true;
   }
 
