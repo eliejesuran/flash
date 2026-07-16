@@ -25,7 +25,11 @@ const ALLOWED_ORIGINS = [
 ];
 const ALLOW_NULL_ORIGIN = true;
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
-const RATE_LIMIT_MAX       = 10;
+// Beaucoup de téléphones sur le même wifi de salle partagent une seule IP
+// publique (NAT) : un simple blip réseau peut faire reconnecter plusieurs
+// d'entre eux à quelques secondes d'écart. Un seuil trop bas les bloquerait
+// mutuellement pile au moment où ils essaient de se rétablir.
+const RATE_LIMIT_MAX       = 60;
 
 // IP réseau local (test depuis un vrai téléphone sur le même wifi que le
 // serveur) : accès restreint au LAN de toute façon, pas un élargissement
@@ -160,7 +164,6 @@ wss.on('connection', (ws, req) => {
   }
 
   session.clients.add(ws);
-  ws._role = null;
   ws._alive = true;
   ws.on('pong', () => { ws._alive = true; });
   touch(session);
@@ -198,7 +201,6 @@ wss.on('connection', (ws, req) => {
           session.master = ws;
         }
 
-        ws._role = role;
         send(ws, { type: 'joined', sessionId, role, peers: session.clients.size, hasMaster: !!session.master });
         broadcast(session, { type: 'master_status', hasMaster: !!session.master }, ws);
         peersUpdate(session);

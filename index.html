@@ -114,7 +114,7 @@
       <span id="master-status" class="badge">Connexion...</span>
     </div>
 
-    <input type="file" id="audio-file" accept="audio/*">
+    <input type="file" id="audio-file" accept="audio/*,.mp3,.m4a,.wav,.aac,.ogg">
     <div id="track-name"></div>
 
     <div class="row">
@@ -391,6 +391,7 @@
   let audioCtx = null, analyser = null, audioEl = null, analysisTimer = null;
   let playing = false;
   let bandRanges = null; // {bass:[lo,hi], mid:[lo,hi], treble:[lo,hi]} en indices de bin
+  let currentBlobUrl = null, onAudioError = null, onAudioCanplay = null;
 
   function startMaster(code) {
     showScreen('master');
@@ -433,12 +434,52 @@
     if (file) setupAudio(file);
   });
 
+  // État piloté par les événements natifs 'play'/'pause' de l'élément audio,
+  // pas par le bouton : un bouton-seul désynchronise `playing` de la réalité
+  // dès que quelque chose met en pause en dehors du clic (fin de piste, ou
+  // sur mobile une interruption OS — appel, autre appli audio, etc.). Les
+  // événements natifs se déclenchent dans tous les cas, donc `playing` reste
+  // toujours correct, et cues/torche/couleur ne restent jamais figés en
+  // silence côté clients.
   function setupAudio(file) {
     if (!audioEl) {
       audioEl = new Audio();
-      audioEl.addEventListener('ended', () => { playing = false; updatePlayButton(); clearInterval(analysisTimer); });
+      audioEl.loop = true; // une piste qui finit ne doit pas juste éteindre le show
+      audioEl.addEventListener('play', () => {
+        playing = true;
+        updatePlayButton();
+        wsSend({ type: 'track_control', action: 'play' });
+        clearInterval(analysisTimer);
+        analysisTimer = setInterval(analysisTick, 33); // ~30Hz, immunisé au throttling de requestAnimationFrame en arrière-plan
+      });
+      audioEl.addEventListener('pause', () => {
+        playing = false;
+        updatePlayButton();
+        wsSend({ type: 'track_control', action: 'pause' });
+        clearInterval(analysisTimer);
+      });
     }
-    audioEl.src = URL.createObjectURL(file);
+
+    // Annule les listeners "once" d'un chargement précédent pas encore résolu
+    // (ex. fichier changé juste après le précédent, ou quitté entre-temps).
+    if (onAudioError) audioEl.removeEventListener('error', onAudioError);
+    if (onAudioCanplay) audioEl.removeEventListener('canplay', onAudioCanplay);
+
+    if (currentBlobUrl) URL.revokeObjectURL(currentBlobUrl); // libère le fichier précédent
+    currentBlobUrl = URL.createObjectURL(file);
+    audioEl.src = currentBlobUrl;
+
+    $('#btn-play').disabled = true; // réactivé seulement quand le fichier est confirmé lisible
+    $('#track-name').textContent = file.name;
+
+    onAudioError = () => {
+      console.error('[audio] échec de chargement', audioEl.error);
+      alert(`Impossible de charger "${file.name}" — format audio non supporté par ce navigateur.`);
+      $('#track-name').textContent = '';
+    };
+    onAudioCanplay = () => { $('#btn-play').disabled = false; };
+    audioEl.addEventListener('error', onAudioError, { once: true });
+    audioEl.addEventListener('canplay', onAudioCanplay, { once: true });
 
     if (!audioCtx) {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -457,27 +498,35 @@
         treble: [toBin(4000), toBin(12000)],
       };
     }
+  }
 
-    $('#btn-play').disabled = false;
-    $('#track-name').textContent = file.name;
+  function resetMasterAudio() {
+    if (audioEl) {
+      if (onAudioError) { audioEl.removeEventListener('error', onAudioError); onAudioError = null; }
+      if (onAudioCanplay) { audioEl.removeEventListener('canplay', onAudioCanplay); onAudioCanplay = null; }
+      audioEl.pause(); // déclenche le listener 'pause' -> playing=false, timer coupé
+      audioEl.removeAttribute('src');
+      audioEl.load();
+    }
+    if (currentBlobUrl) { URL.revokeObjectURL(currentBlobUrl); currentBlobUrl = null; }
+    $('#btn-play').disabled = true;
+    $('#track-name').textContent = '';
+    $('#audio-file').value = '';
+    $('#meter-bass').style.width = '0%';
+    $('#meter-mid').style.width = '0%';
+    $('#meter-treble').style.width = '0%';
   }
 
   $('#btn-play').addEventListener('click', async () => {
     if (!audioEl) return;
     if (audioCtx.state === 'suspended') await audioCtx.resume();
-
-    if (playing) {
-      audioEl.pause();
-      playing = false;
-      wsSend({ type: 'track_control', action: 'pause' });
-      clearInterval(analysisTimer);
-    } else {
-      await audioEl.play();
-      playing = true;
-      wsSend({ type: 'track_control', action: 'play' });
-      analysisTimer = setInterval(analysisTick, 33); // ~30Hz, immunisé au throttling de requestAnimationFrame en arrière-plan
+    try {
+      if (playing) audioEl.pause();
+      else await audioEl.play();
+    } catch (err) {
+      console.error('[audio] lecture impossible', err);
+      alert('Lecture impossible — format non supporté par ce navigateur ?');
     }
-    updatePlayButton();
   });
 
   function updatePlayButton() {
@@ -500,7 +549,7 @@
 
   function createBandEnvelope() {
     const history = [];
-    const HISTORY_SIZE = 43; // ~0.7s à 60fps
+    const HISTORY_SIZE = 21; // ~0.7s à 33ms/tick (setInterval, pas 60fps -- ne pas recompter en frames)
     let envelope = 0;
     let lastBeatAt = -Infinity;
     return (energy, now) => {
@@ -515,7 +564,10 @@
       } else {
         envelope *= 0.88;
       }
-      return envelope;
+      // Plancher proportionnel à l'énergie courante : entre deux coups nets,
+      // l'affichage "respire" avec le volume réel au lieu de tomber à zéro et
+      // sembler mort pendant un passage soutenu/peu percussif.
+      return Math.max(envelope, energy * 0.3);
     };
   }
 
@@ -556,10 +608,9 @@
   }
 
   $('#btn-leave-master').addEventListener('click', () => {
-    if (playing) { audioEl.pause(); playing = false; }
-    clearInterval(analysisTimer);
     wsDisconnect();
     releaseWakeLock();
+    resetMasterAudio();
     showScreen('home');
   });
 
