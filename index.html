@@ -165,7 +165,17 @@
     </div>
   </div>
 
-<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/lib/browser.min.js"></script>
+<script type="module">
+  // /lib/browser.min.js (utilisé avant) charge sans erreur réseau mais contient
+  // require("./core/qrcode") — CommonJS, inexistant en navigateur, donc plante
+  // silencieusement à l'exécution : QRCode ne se définit jamais, malgré un 200 OK.
+  // Vérifié en import Node réel (pas juste un curl) : le bundle ESM +esm de
+  // jsdelivr (résolution des dépendances internes incluse) exécute et produit
+  // une vraie matrice QR. C'est un module ES, pas un script classique — d'où le
+  // besoin de ce petit script dédié pour l'exposer en global.
+  import QRCode from 'https://cdn.jsdelivr.net/npm/qrcode@1.5.3/+esm';
+  window.QRCode = QRCode;
+</script>
 <script>
 (() => {
   'use strict';
